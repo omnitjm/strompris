@@ -130,6 +130,18 @@ h2 { margin: 0; font: 700 13px/1 var(--display); letter-spacing: .12em; text-tra
 .davg { text-align: right; font: 700 16px/1 var(--display); font-variant-numeric: tabular-nums; }
 .davg small { display: block; font: 500 11px/1.4 var(--body); color: var(--muted); }
 .fc-tag { color: var(--accent); }
+.drow .chev { display: inline-block; margin-left: 4px; color: var(--muted); font-size: 11px; transition: transform .15s; }
+.drow[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.hgrid {
+  display: grid; grid-auto-flow: column; grid-template-columns: 1fr 1fr; gap: 0 16px;
+  padding: 4px 14px 12px; border-top: 1px dashed var(--line); font-variant-numeric: tabular-nums;
+}
+.hcell { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.hcell i { width: 8px; height: 8px; border-radius: 2px; background: var(--lvl); flex: none; }
+.hcell .hh { color: var(--muted); flex: 1; }
+.hcell .hv { font-weight: 600; }
+.hcell.past { opacity: .4; }
+.hcell.cur .hh, .hcell.cur .hv { color: var(--fg); font-weight: 800; }
 
 footer { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
 footer a { color: inherit; }
@@ -240,11 +252,12 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     return key === today ? "I dag" : key === tomorrow ? "I morgen" : dayLabel(key).wd;
   };
 
-  let net = store.get("net") || { id: "radius_c", name: "Radius C", priceArea: "DK2" };
+  let net = store.get("net2") || { id: "trefor_el-net_c", name: "Trefor El-net C", priceArea: "DK1" };
   let nets = store.get("nets");
   let data = null;     // { fetched, netId, prices: [...] }
   let hours = [];      // hourly aggregates
   let selIdx = -1;
+  const openDays = new Set([(() => { const t = new Date(); const m = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1); return `${m.getFullYear()}-${pad(m.getMonth()+1)}-${pad(m.getDate())}`; })()]);
 
   // ---------- data ----------
   async function fetchPrices() {
@@ -371,12 +384,21 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
       const fc = list.some(([h]) => h.fc);
       const dl = dayLabel(day);
       const left = (mn - gMin) / span * 100, width = Math.max(2, (mx - mn) / span * 100), a = (av - gMin) / span * 100;
-      rows += `<button type="button" class="drow" data-day="${day}">
-        <div class="dname">${relDay(day)}<small>${dl.dm}${fc ? ' · <span class="fc-tag">prognose</span>' : ""}</small></div>
+      const isOpen = openDays.has(day);
+      rows += `<button type="button" class="drow" data-day="${day}" aria-expanded="${isOpen}">
+        <div class="dname">${relDay(day)}<span class="chev">▶</span><small>${dl.dm}${fc ? ' · <span class="fc-tag">prognose</span>' : ""}</small></div>
         <div><div class="range"><div class="r" style="left:${left}%;width:${width}%"></div><div class="a" style="left:calc(${a}% - 1.5px)"></div></div>
           <div class="range-l"><span>${kr(mn)}</span><span>${kr(mx)}</span></div></div>
         <div class="davg">${kr(av)}<small>snit</small></div>
       </button>`;
+      if (isOpen) {
+        rows += `<div class="hgrid" style="grid-template-rows:repeat(${Math.ceil(list.length / 2)},auto)">` + list.map(([h, i]) => {
+          const c = ["hcell", "lvl-" + lvl(h.v, L)];
+          if (h.t + 36e5 <= now) c.push("past");
+          if (i === curH) c.push("cur");
+          return `<div class="${c.join(" ")}"><i></i><span class="hh">${pad(h.h)}–${pad((h.h + 1) % 24)}</span><span class="hv">${kr(h.v)}</span></div>`;
+        }).join("") + `</div>`;
+      }
     }
     $("days").innerHTML = rows;
 
@@ -432,8 +454,11 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
   });
   $("days").addEventListener("click", e => {
     const r = e.target.closest(".drow"); if (!r) return;
-    const d = document.querySelector(`.day[data-day="${r.dataset.day}"]`);
-    if (d) { $("stripWrap").scrollTo({ left: d.offsetLeft - 16, behavior: "smooth" }); $("stripWrap").scrollIntoView({ behavior: "smooth", block: "center" }); }
+    const day = r.dataset.day;
+    if (openDays.has(day)) openDays.delete(day); else openDays.add(day);
+    render();
+    const d = document.querySelector(`.day[data-day="${day}"]`);
+    if (d) $("stripWrap").scrollTo({ left: d.offsetLeft - 16, behavior: "smooth" });
   });
 
   async function openNet() {
@@ -446,12 +471,11 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
   }
   $("netBtn").addEventListener("click", openNet);
   $("netDlg").addEventListener("close", () => {
-    store.set("netChosen", true);
     if ($("netDlg").returnValue !== "ok") return;
     const list = nets && nets.length ? nets : FALLBACK_NETS;
     const n = list.find(x => x.id === $("netSel").value);
     if (!n || n.id === net.id) return;
-    net = n; store.set("net", net); selIdx = -1; data = null;
+    net = n; store.set("net2", net); selIdx = -1; data = null;
     load(true);
   });
 
@@ -459,7 +483,6 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
   setInterval(() => { if (!document.hidden) render(); }, 60e3);
 
   load(false);
-  if (!store.get("netChosen")) setTimeout(openNet, 600);
 })();
 </script>
 </body>
