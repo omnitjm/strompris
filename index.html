@@ -52,11 +52,9 @@ body {
 }
 header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 h1 { margin: 0; font: 800 34px/1 var(--display); font-stretch: 90%; letter-spacing: -.02em; }
-.chip {
-  font: 600 13px/1 var(--body); color: var(--fg); background: var(--panel); border: 1px solid var(--line);
-  border-radius: 999px; padding: 9px 12px; cursor: pointer; max-width: 55%;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg button { font: 600 14px/1 var(--body); color: var(--muted); background: none; border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
 button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Segmented tabs */
@@ -129,25 +127,19 @@ footer a { color: inherit; }
 .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .empty { padding: 18px 4px; color: var(--muted); text-align: center; }
 
-dialog {
-  border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--fg);
-  padding: 18px; width: min(420px, calc(100vw - 32px));
-}
-dialog::backdrop { background: rgb(0 0 0 / .45); }
-dialog h3 { margin: 0 0 6px; font: 700 18px/1.2 var(--display); }
-dialog p { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
-dialog select { width: 100%; font: 16px var(--body); padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
-dialog .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 18px; font-size: 15px; cursor: pointer; }
-dialog .check input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--fg); flex: none; }
-dialog .check small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
-dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.check { display: flex; gap: 12px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 15px; font-weight: 600; cursor: pointer; }
+.check input { width: 22px; height: 22px; margin: 0; accent-color: var(--cheap); flex: none; }
+.check small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 3px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>Strømpris</h1>
-    <button class="chip" id="netBtn" type="button" aria-label="Indstillinger: netselskab og elafgift">Netselskab</button>
+    <div class="seg" role="group" aria-label="Prisområde">
+      <button type="button" data-area="DK1" aria-pressed="true">Vest</button>
+      <button type="button" data-area="DK2" aria-pressed="false">Øst</button>
+    </div>
   </header>
 
   <div class="tabs" role="tablist">
@@ -166,36 +158,26 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     <span><i style="background:repeating-linear-gradient(135deg,var(--muted) 0 2px,transparent 2px 4px);box-shadow:inset 0 0 0 1px var(--muted)"></i>Prognose</span>
   </div>
 
+  <label class="check" for="heatChk"><input type="checkbox" id="heatChk">
+    <span>Reduceret elafgift (elvarme eller varmepumpe)
+      <small>Gælder forbrug over 4.000 kWh om året. I 2026 og 2027 er elafgiften ca. 1 øre/kWh for alle, så valget ændrer først prisen fra 2028.</small></span></label>
+
   <footer>
     <div id="updated"></div>
     <div>Pris pr. kWh inkl. spotpris, nettarif, systemtarif, elafgift og moms. Dit elselskabs eget tillæg og abonnement er ikke med. Priser efter i morgen er prognoser. Data fra <a href="https://stromligning.dk" target="_blank" rel="noopener">Strømligning</a>.</div>
   </footer>
 </div>
 
-<dialog id="netDlg">
-  <form method="dialog" id="netForm">
-    <h3>Indstillinger</h3>
-    <p>Netselskabet bestemmer nettariffen og prisområdet (Øst- eller Vestdanmark). Du finder det på din elregning.</p>
-    <select id="netSel" aria-label="Netselskab"></select>
-    <label class="check" for="heatChk"><input type="checkbox" id="heatChk">
-      <span>Reduceret elafgift (elvarme eller varmepumpe)
-        <small>Reduceret sats gælder forbrug over 4.000 kWh om året. I 2026 og 2027 er elafgiften sat ned til ca. 1 øre/kWh for alle, så valget ændrer først prisen fra 2028.</small></span></label>
-    <div class="row">
-      <button class="btn" value="cancel" type="submit">Annuller</button>
-      <button class="btn primary" value="ok" type="submit">Gem</button>
-    </div>
-  </form>
-</dialog>
 
 <script>
 (() => {
   const API = "https://stromligning.dk/api";
   const MAX_AGE = 30 * 60 * 1000;
-  const FALLBACK_NETS = [
-    ["trefor_el-net_c","Trefor El-net C","DK1"],["n1_c","N1 C","DK1"],["konstant_c","Konstant C - 151","DK1"],
-    ["dinel_c","Dinel C","DK1"],["elnet_midt_c","Elnet midt C","DK1"],["vores_elnet","Vores Elnet C","DK1"],
-    ["radius_c","Radius C","DK2"],["cerius_c","Cerius C","DK2"],["trefor_el-net_oest_c","TREFOR El-net Øst A/S","DK2"],["nke-elnet","NKE-Elnet","DK2"]
-  ].map(([id,name,priceArea]) => ({id,name,priceArea}));
+  // Prisområde → netselskab der bruges til nettariffen
+  const AREAS = {
+    DK1: { name: "Vestdanmark", net: "trefor_el-net_c", netName: "TREFOR El-net" },
+    DK2: { name: "Østdanmark", net: "radius_c", netName: "Radius" }
+  };
 
   const $ = id => document.getElementById(id);
   const store = {
@@ -215,8 +197,8 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
   const shortDate = key => { const d = dateOf(key); return `${d.getDate()}. ${MO[d.getMonth()].slice(0, 3)}`; };
   const cap = s => s[0].toUpperCase() + s.slice(1);
 
-  let net = store.get("net2") || { id: "trefor_el-net_c", name: "Trefor El-net C", priceArea: "DK1" };
-  let nets = store.get("nets");
+  let area = store.get("area") === "DK2" ? "DK2" : "DK1";
+  const netId = () => AREAS[area].net;
   let data = null;
   let hours = [];
   let tab = "today";
@@ -230,28 +212,17 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     const t = new Date();
     const from = new Date(t.getFullYear(), t.getMonth(), t.getDate());
     const to = new Date(from.getTime() + 8 * 864e5);
-    const url = `${API}/prices?supplierId=${encodeURIComponent(net.id)}&forecast=true&from=${from.toISOString()}&to=${to.toISOString()}`;
+    const url = `${API}/prices?supplierId=${encodeURIComponent(netId())}&forecast=true&from=${from.toISOString()}&to=${to.toISOString()}`;
     const res = await fetch(url);
     if (res.status === 429) throw new Error("rate");
     if (!res.ok) throw new Error("http " + res.status);
     const j = await res.json();
     if (!j.prices || !j.prices.length) throw new Error("empty");
-    data = { fetched: Date.now(), netId: net.id, prices: j.prices.map(p => ({
+    data = { fetched: Date.now(), netId: netId(), prices: j.prices.map(p => ({
       t: Date.parse(p.date), local: p.localDate, v: p.price.total, tax: p.details?.electricityTax?.total ?? 0,
       res: p.resolution === "15m" ? 15 : 60, fc: !!p.forecast
     })) };
     store.set("prices2", data);
-  }
-
-  async function fetchNets() {
-    if (nets && nets.length) return;
-    try {
-      const r = await fetch(`${API}/suppliers`);
-      if (!r.ok) return;
-      const j = await r.json();
-      nets = j.filter(s => s.id && s.name && !/udgået/i.test(s.name)).map(s => ({ id: s.id, name: s.name, priceArea: s.priceArea }));
-      store.set("nets", nets);
-    } catch {}
   }
 
   // 15-min prices are averaged into whole hours, keyed by local date + hour
@@ -354,12 +325,13 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
 
   function render() {
     document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
-    $("netBtn").textContent = net.name;
-    if (!data) return;
+    document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.area === area));
+    $("heatChk").checked = heat;
+    if (!data) { $("panel").innerHTML = '<div class="empty">Henter priser …</div>'; return; }
     aggregate(); computeLevels();
     $("panel").innerHTML = tab === "today" ? dayView(todayKey()) : tab === "tomorrow" ? dayView(tomorrowKey()) : weekView();
     const f = new Date(data.fetched);
-    $("updated").textContent = `Opdateret kl. ${pad(f.getHours())}:${pad(f.getMinutes())} · ${net.name} (${net.priceArea === "DK1" ? "Vestdanmark" : "Østdanmark"}) · ${heat ? "reduceret elafgift (elvarme)" : "fuld elafgift"}`;
+    $("updated").textContent = `Opdateret kl. ${pad(f.getHours())}:${pad(f.getMinutes())} · ${AREAS[area].name} (nettarif fra ${AREAS[area].netName}) · ${heat ? "reduceret elafgift (elvarme)" : "fuld elafgift"}`;
   }
 
   function showError(msg) {
@@ -372,8 +344,8 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
   async function load(force) {
     if (loading) return;
     const cached = store.get("prices2");
-    if (!data && cached && cached.netId === net.id) { data = cached; render(); }
-    const fresh = data && data.netId === net.id && Date.now() - data.fetched < MAX_AGE;
+    if (!data && cached && cached.netId === netId()) { data = cached; render(); }
+    const fresh = data && data.netId === netId() && Date.now() - data.fetched < MAX_AGE;
     if (fresh && !force) return;
     loading = true;
     try {
@@ -401,25 +373,12 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16
     render();
   });
 
-  async function openNet() {
-    await fetchNets();
-    const list = (nets && nets.length ? nets : FALLBACK_NETS).slice().sort((a, b) => a.name.localeCompare(b.name, "da"));
-    const grp = (area, label) => `<optgroup label="${label}">` + list.filter(n => n.priceArea === area)
-      .map(n => `<option value="${n.id}"${n.id === net.id ? " selected" : ""}>${n.name}</option>`).join("") + "</optgroup>";
-    $("netSel").innerHTML = grp("DK1", "Vestdanmark (DK1)") + grp("DK2", "Østdanmark (DK2)");
-    $("heatChk").checked = heat;
-    $("netDlg").showModal();
-  }
-  $("netBtn").addEventListener("click", openNet);
-  $("netDlg").addEventListener("close", () => {
-    if ($("netDlg").returnValue !== "ok") return;
-    if ($("heatChk").checked !== heat) { heat = $("heatChk").checked; store.set("heat", heat); render(); }
-    const list = nets && nets.length ? nets : FALLBACK_NETS;
-    const n = list.find(x => x.id === $("netSel").value);
-    if (!n || n.id === net.id) return;
-    net = n; store.set("net2", net); data = null;
-    load(true);
+  document.querySelector(".seg").addEventListener("click", e => {
+    const b = e.target.closest("button[data-area]"); if (!b || b.dataset.area === area) return;
+    area = b.dataset.area; store.set("area", area); data = null;
+    render(); load(true);
   });
+  $("heatChk").addEventListener("change", () => { heat = $("heatChk").checked; store.set("heat", heat); render(); });
 
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { load(false); render(); } });
   setInterval(() => { if (!document.hidden) render(); }, 60e3);
