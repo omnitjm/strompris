@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Strømpris</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Strømpris">
+<meta name="theme-color" content="#14171c">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&display=swap">
+<style>
+/* Layout: one column "meter display" — big live reading, cheapest window, scrollable hour strip, 7 day ledger */
+:root {
+  --bg: #f3f4f1;
+  --panel: #ffffff;
+  --fg: #16191d;
+  --muted: #646b73;
+  --line: #dcdfdb;
+  --accent: #c27a00;
+  --cheap: #1f8a5b;
+  --mid: #b98500;
+  --dear: #c8412f;
+  --display: "Archivo", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101317; --panel: #191d23; --fg: #eef0ec; --muted: #8d959e; --line: #2a3038;
+    --accent: #f2a72e; --cheap: #3fc488; --mid: #e9b43a; --dear: #ff6a52; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 15px/1.45 var(--body);
+  -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+}
+.wrap {
+  max-width: 560px; margin: 0 auto;
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+  padding-block: calc(env(safe-area-inset-top, 0px) + 14px) calc(env(safe-area-inset-bottom, 0px) + 28px);
+  display: flex; flex-direction: column; gap: 22px;
+}
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { font: 700 13px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.chip {
+  font: 600 13px/1 var(--body); color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 8px 12px; cursor: pointer; max-width: 60%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Live reading */
+.now { display: flex; flex-direction: column; gap: 6px; }
+.now .label { font-size: 13px; color: var(--muted); }
+.reading { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.big {
+  font: 800 clamp(64px, 22vw, 104px)/.9 var(--display); font-stretch: 85%;
+  letter-spacing: -.03em; font-variant-numeric: tabular-nums;
+}
+.unit { font: 600 18px/1 var(--display); color: var(--muted); }
+.pill {
+  align-self: center; font: 700 12px/1 var(--body); letter-spacing: .06em; text-transform: uppercase;
+  padding: 6px 9px; border-radius: 6px; color: var(--bg); background: var(--muted);
+}
+.lvl-cheap { --lvl: var(--cheap); } .lvl-mid { --lvl: var(--mid); } .lvl-dear { --lvl: var(--dear); }
+.pill[class*="lvl-"] { background: var(--lvl); }
+.big[class*="lvl-"] { color: var(--lvl); }
+.sub { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.sub b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Tip */
+.tip {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center;
+}
+.tip .t { font-size: 13px; color: var(--muted); grid-column: 1 / -1; }
+.tip .w { font: 700 22px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+.tip .p { font: 600 15px/1 var(--body); color: var(--cheap); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Hour strip */
+h2 { margin: 0; font: 700 13px/1 var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.sec { display: flex; flex-direction: column; gap: 10px; }
+.readout { min-height: 20px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.readout b { font-weight: 700; }
+.strip-wrap { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; margin-inline: -16px; padding-inline: 16px; }
+.strip-wrap::-webkit-scrollbar { display: none; }
+.strip { display: flex; align-items: flex-end; gap: 0; height: 190px; position: relative; padding-top: 22px; }
+.day { display: flex; flex-direction: column; border-left: 1px solid var(--line); padding-left: 3px; margin-left: 3px; }
+.day:first-child { border-left: 0; margin-left: 0; padding-left: 0; }
+.day-h { font: 700 12px/1 var(--display); color: var(--fg); height: 22px; margin-top: -22px; white-space: nowrap; }
+.day-h span { color: var(--muted); font-weight: 500; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 140px; }
+.bar {
+  width: 9px; border-radius: 2px 2px 0 0; background: var(--lvl, var(--muted)); cursor: pointer; flex: none;
+  border: 0; padding: 0; min-height: 2px;
+}
+.bar.fc { background: repeating-linear-gradient(135deg, var(--lvl) 0 2px, transparent 2px 4px); box-shadow: inset 0 0 0 1px var(--lvl); }
+.bar.past { opacity: .32; }
+.bar.cur { outline: 2px solid var(--fg); outline-offset: 1px; }
+.bar.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ticks { display: flex; gap: 2px; height: 16px; margin-top: 4px; }
+.ticks i { width: 9px; flex: none; font: 500 10px/16px var(--body); color: var(--muted); font-style: normal; overflow: visible; white-space: nowrap; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* Week ledger */
+.days { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.drow {
+  display: grid; grid-template-columns: 76px 1fr 54px; gap: 12px; align-items: center;
+  padding: 12px 14px; border: 0; border-top: 1px solid var(--line); background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; width: 100%;
+}
+.drow:first-child { border-top: 0; }
+.dname { font: 700 15px/1.1 var(--display); }
+.dname small { display: block; font: 500 12px/1.3 var(--body); color: var(--muted); }
+.range { position: relative; height: 8px; border-radius: 4px; background: var(--line); }
+.range .r { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--cheap), var(--mid), var(--dear)); }
+.range .a { position: absolute; top: -4px; bottom: -4px; width: 3px; border-radius: 2px; background: var(--fg); }
+.range-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 5px; font-variant-numeric: tabular-nums; }
+.davg { text-align: right; font: 700 16px/1 var(--display); font-variant-numeric: tabular-nums; }
+.davg small { display: block; font: 500 11px/1.4 var(--body); color: var(--muted); }
+.fc-tag { color: var(--accent); }
+
+footer { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+footer a { color: inherit; }
+.err { background: var(--panel); border: 1px solid var(--dear); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+.err button { margin-top: 8px; }
+.btn { font: 600 14px/1 var(--body); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+dialog {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--fg);
+  padding: 18px; width: min(420px, calc(100vw - 32px));
+}
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+dialog h3 { margin: 0 0 6px; font: 700 18px/1.2 var(--display); }
+dialog p { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+dialog select { width: 100%; font: 16px var(--body); padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.skel { color: var(--muted); }
+@media (prefers-reduced-motion: no-preference) { .bar { transition: opacity .2s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Strømpris</div>
+    <button class="chip" id="netBtn" type="button" aria-label="Skift netselskab">Netselskab</button>
+  </header>
+
+  <section class="now" aria-live="polite">
+    <div class="label" id="nowLabel">Henter priser …</div>
+    <div class="reading">
+      <div class="big" id="nowPrice">–,––</div>
+      <div class="unit">kr/kWh</div>
+      <div class="pill" id="nowPill" hidden></div>
+    </div>
+    <div class="sub" id="nowSub"></div>
+  </section>
+
+  <div id="errBox" hidden></div>
+
+  <section class="tip" id="tip" hidden>
+    <div class="t">Billigste 3 timer i det næste døgn</div>
+    <div class="w" id="tipWin"></div>
+    <div class="p" id="tipPrice"></div>
+  </section>
+
+  <section class="sec">
+    <h2>Time for time</h2>
+    <div class="readout" id="readout">Tryk på en søjle for at se prisen.</div>
+    <div class="strip-wrap" id="stripWrap"><div class="strip" id="strip"></div></div>
+    <div class="legend">
+      <span><i style="background:var(--cheap)"></i>Billig</span>
+      <span><i style="background:var(--mid)"></i>Middel</span>
+      <span><i style="background:var(--dear)"></i>Dyr</span>
+      <span><i style="background:repeating-linear-gradient(135deg,var(--muted) 0 2px,transparent 2px 4px);box-shadow:inset 0 0 0 1px var(--muted)"></i>Prognose</span>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>7 dage frem</h2>
+    <div class="days" id="days"><div class="drow skel">Henter …</div></div>
+  </section>
+
+  <footer>
+    <div id="updated"></div>
+    <div>Pris inkl. spotpris, nettarif, systemtarif, elafgift og moms. Dit elselskabs eget tillæg og abonnement er ikke med. Priser efter i morgen er prognoser. Data fra <a href="https://stromligning.dk" target="_blank" rel="noopener">Strømligning</a>.</div>
+  </footer>
+</div>
+
+<dialog id="netDlg">
+  <form method="dialog" id="netForm">
+    <h3>Vælg netselskab</h3>
+    <p>Netselskabet bestemmer nettariffen og prisområdet (Øst- eller Vestdanmark). Du finder det på din elregning.</p>
+    <label for="netSel" class="skel" style="font-size:12px">Netselskab</label>
+    <select id="netSel"></select>
+    <div class="row">
+      <button class="btn" value="cancel" type="submit">Annuller</button>
+      <button class="btn primary" value="ok" type="submit" id="netOk">Gem</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const API = "https://stromligning.dk/api";
+  const MAX_AGE = 30 * 60 * 1000;
+  const FALLBACK_NETS = [
+    ["radius_c","Radius C","DK2"],["cerius_c","Cerius C","DK2"],["trefor_el-net_oest_c","TREFOR El-net Øst A/S","DK2"],
+    ["n1_c","N1 C","DK1"],["konstant_c","Konstant C - 151","DK1"],["trefor_el-net_c","Trefor El-net C","DK1"],
+    ["dinel_c","Dinel C","DK1"],["elnet_midt_c","Elnet midt C","DK1"],["vores_elnet","Vores Elnet C","DK1"],["nke-elnet","NKE-Elnet","DK2"]
+  ].map(([id,name,priceArea]) => ({id,name,priceArea}));
+
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+  const kr = v => v.toLocaleString("da-DK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const WD = ["Søn","Man","Tir","Ons","Tor","Fre","Lør"];
+  const MO = ["jan","feb","mar","apr","maj","jun","jul","aug","sep","okt","nov","dec"];
+  const pad = n => String(n).padStart(2, "0");
+  const dayKey = local => local.slice(0, 10);
+  const dayLabel = key => { const [y,m,d] = key.split("-").map(Number); const dt = new Date(y, m-1, d); return { wd: WD[dt.getDay()], dm: `${d}. ${MO[m-1]}` }; };
+  const relDay = key => {
+    const t = new Date(); const today = `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}`;
+    const tm = new Date(t.getFullYear(), t.getMonth(), t.getDate()+1);
+    const tomorrow = `${tm.getFullYear()}-${pad(tm.getMonth()+1)}-${pad(tm.getDate())}`;
+    return key === today ? "I dag" : key === tomorrow ? "I morgen" : dayLabel(key).wd;
+  };
+
+  let net = store.get("net") || { id: "radius_c", name: "Radius C", priceArea: "DK2" };
+  let nets = store.get("nets");
+  let data = null;     // { fetched, netId, prices: [...] }
+  let hours = [];      // hourly aggregates
+  let selIdx = -1;
+
+  // ---------- data ----------
+  async function fetchPrices() {
+    const t = new Date();
+    const from = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    const to = new Date(from.getTime() + 8 * 864e5);
+    const url = `${API}/prices?supplierId=${encodeURIComponent(net.id)}&forecast=true&from=${from.toISOString()}&to=${to.toISOString()}`;
+    const res = await fetch(url);
+    if (res.status === 429) throw new Error("rate");
+    if (!res.ok) throw new Error("http " + res.status);
+    const j = await res.json();
+    if (!j.prices || !j.prices.length) throw new Error("empty");
+    data = { fetched: Date.now(), netId: net.id, prices: j.prices.map(p => ({
+      t: Date.parse(p.date), local: p.localDate, v: p.price.total,
+      spot: p.details?.electricity?.total ?? null, net: p.details?.distribution?.total ?? null,
+      res: p.resolution === "15m" ? 15 : 60, fc: !!p.forecast
+    })) };
+    store.set("prices", data);
+  }
+
+  async function fetchNets() {
+    if (nets && nets.length) return;
+    try {
+      const r = await fetch(`${API}/suppliers`);
+      if (!r.ok) return;
+      const j = await r.json();
+      nets = j.filter(s => s.id && s.name && !/udgået/i.test(s.name)).map(s => ({ id: s.id, name: s.name, priceArea: s.priceArea }));
+      store.set("nets", nets);
+    } catch {}
+  }
+
+  function aggregate() {
+    const m = new Map();
+    for (const p of data.prices) {
+      const k = p.local.slice(0, 13);
+      if (!m.has(k)) m.set(k, { key: k, day: dayKey(p.local), h: +p.local.slice(11, 13), t: p.t, sum: 0, n: 0, fc: false });
+      const e = m.get(k); e.sum += p.v; e.n++; e.fc = e.fc || p.fc; e.t = Math.min(e.t, p.t);
+    }
+    hours = [...m.values()].sort((a, b) => a.t - b.t).map(e => ({ ...e, v: e.sum / e.n }));
+  }
+
+  // ---------- render ----------
+  function levels() {
+    const now = Date.now();
+    const vals = hours.filter(h => h.t + 36e5 > now).map(h => h.v).sort((a, b) => a - b);
+    const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
+    return { lo: q(1/3), hi: q(2/3) };
+  }
+  const lvl = (v, L) => v <= L.lo ? "cheap" : v >= L.hi ? "dear" : "mid";
+  const lvlName = { cheap: "Billig", mid: "Middel", dear: "Dyr" };
+
+  function render() {
+    if (!data) return;
+    aggregate();
+    const now = Date.now();
+    const L = levels();
+
+    // current price (exact interval, 15 min or 1 h)
+    const cur = data.prices.find(p => p.t <= now && now < p.t + p.res * 6e4);
+    const curH = hours.findIndex(h => h.t <= now && now < h.t + 36e5);
+    if (cur) {
+      const end = new Date(cur.t + cur.res * 6e4), st = new Date(cur.t);
+      $("nowLabel").textContent = `Nu · kl. ${pad(st.getHours())}:${pad(st.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`;
+      const l = lvl(cur.v, L);
+      $("nowPrice").textContent = kr(cur.v);
+      $("nowPrice").className = "big lvl-" + l;
+      $("nowPill").textContent = lvlName[l];
+      $("nowPill").className = "pill lvl-" + l;
+      $("nowPill").hidden = false;
+      const nextH = hours[curH + 1];
+      const todays = hours.filter(h => h.day === hours[curH]?.day);
+      const avg = todays.reduce((s, h) => s + h.v, 0) / (todays.length || 1);
+      $("nowSub").innerHTML =
+        (nextH ? `<span>Næste time <b>${kr(nextH.v)}</b></span>` : "") +
+        `<span>Snit i dag <b>${kr(avg)}</b></span>` +
+        (cur.spot != null ? `<span>Heraf strøm <b>${kr(cur.spot)}</b></span>` : "");
+    } else {
+      $("nowLabel").textContent = "Ingen pris for lige nu";
+    }
+
+    // cheapest 3h window, next 24h
+    const ahead = hours.slice(Math.max(0, curH), Math.max(0, curH) + 24);
+    let best = null;
+    for (let i = 0; i + 3 <= ahead.length; i++) {
+      const a = (ahead[i].v + ahead[i+1].v + ahead[i+2].v) / 3;
+      if (!best || a < best.a) best = { i, a };
+    }
+    if (best) {
+      const s = ahead[best.i], e = ahead[best.i + 2];
+      const endH = (e.h + 1) % 24;
+      $("tipWin").textContent = `${relDay(s.day)} kl. ${pad(s.h)}–${pad(endH)}`;
+      $("tipPrice").textContent = `${kr(best.a)} kr`;
+      $("tip").hidden = false;
+    }
+
+    // hour strip
+    const max = Math.max(...hours.map(h => h.v), 0.01);
+    const byDay = new Map();
+    hours.forEach((h, i) => { if (!byDay.has(h.day)) byDay.set(h.day, []); byDay.get(h.day).push([h, i]); });
+    let html = "";
+    for (const [day, list] of byDay) {
+      const dl = dayLabel(day);
+      html += `<div class="day" data-day="${day}"><div class="day-h">${relDay(day)} <span>${dl.dm}</span></div><div class="bars">`;
+      for (const [h, i] of list) {
+        const cls = ["bar", "lvl-" + lvl(h.v, L)];
+        if (h.fc) cls.push("fc");
+        if (h.t + 36e5 <= now) cls.push("past");
+        if (i === curH) cls.push("cur");
+        if (i === selIdx) cls.push("sel");
+        const ht = Math.max(2, Math.round(Math.max(0, h.v) / max * 140));
+        html += `<button type="button" class="${cls.join(" ")}" style="height:${ht}px" data-i="${i}" aria-label="${relDay(day)} kl. ${pad(h.h)}: ${kr(h.v)} kr"></button>`;
+      }
+      html += `</div><div class="ticks">${list.map(([h]) => `<i>${h.h % 6 === 0 ? pad(h.h) : ""}</i>`).join("")}</div></div>`;
+    }
+    $("strip").innerHTML = html;
+
+    // week ledger
+    const gMin = Math.min(...hours.map(h => h.v)), gMax = max;
+    const span = Math.max(0.01, gMax - gMin);
+    let rows = "";
+    for (const [day, list] of byDay) {
+      const vs = list.map(([h]) => h.v);
+      const mn = Math.min(...vs), mx = Math.max(...vs), av = vs.reduce((a, b) => a + b, 0) / vs.length;
+      const fc = list.some(([h]) => h.fc);
+      const dl = dayLabel(day);
+      const left = (mn - gMin) / span * 100, width = Math.max(2, (mx - mn) / span * 100), a = (av - gMin) / span * 100;
+      rows += `<button type="button" class="drow" data-day="${day}">
+        <div class="dname">${relDay(day)}<small>${dl.dm}${fc ? ' · <span class="fc-tag">prognose</span>' : ""}</small></div>
+        <div><div class="range"><div class="r" style="left:${left}%;width:${width}%"></div><div class="a" style="left:calc(${a}% - 1.5px)"></div></div>
+          <div class="range-l"><span>${kr(mn)}</span><span>${kr(mx)}</span></div></div>
+        <div class="davg">${kr(av)}<small>snit</small></div>
+      </button>`;
+    }
+    $("days").innerHTML = rows;
+
+    const f = new Date(data.fetched);
+    $("updated").textContent = `Opdateret ${pad(f.getHours())}:${pad(f.getMinutes())} · ${net.name} (${net.priceArea === "DK1" ? "Vestdanmark" : "Østdanmark"})`;
+    $("netBtn").textContent = net.name;
+    if (selIdx >= 0) showReadout(selIdx);
+  }
+
+  function showReadout(i) {
+    const h = hours[i]; if (!h) return;
+    const dl = dayLabel(h.day);
+    $("readout").innerHTML = `${relDay(h.day)} ${dl.dm} kl. ${pad(h.h)}–${pad((h.h + 1) % 24)} · <b>${kr(h.v)} kr/kWh</b>${h.fc ? ' <span class="fc-tag">(prognose)</span>' : ""}`;
+  }
+
+  function scrollToNow() {
+    const c = document.querySelector(".bar.cur");
+    if (c) $("stripWrap").scrollLeft = Math.max(0, c.offsetLeft - 40);
+  }
+
+  function showError(msg) {
+    $("errBox").hidden = false;
+    $("errBox").innerHTML = `<div class="err">${msg}<br><button class="btn" type="button" id="retry">Prøv igen</button></div>`;
+    $("retry").onclick = () => load(true);
+  }
+
+  let loading = false;
+  async function load(force) {
+    if (loading) return;
+    const cached = store.get("prices");
+    if (!data && cached && cached.netId === net.id) { data = cached; render(); scrollToNow(); }
+    const fresh = data && data.netId === net.id && Date.now() - data.fetched < MAX_AGE;
+    if (fresh && !force) return;
+    loading = true;
+    try {
+      await fetchPrices();
+      $("errBox").hidden = true;
+      render(); scrollToNow();
+    } catch (e) {
+      const msg = e.message === "rate"
+        ? "For mange opdateringer på kort tid. Vent et kvarters tid, så virker det igen."
+        : "Kunne ikke hente priser. Tjek din internetforbindelse.";
+      if (data) render();
+      showError(data ? msg + " Viser de senest hentede priser." : msg);
+    } finally { loading = false; }
+  }
+
+  // ---------- events ----------
+  $("strip").addEventListener("click", e => {
+    const b = e.target.closest(".bar"); if (!b) return;
+    document.querySelectorAll(".bar.sel").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel"); selIdx = +b.dataset.i; showReadout(selIdx);
+  });
+  $("days").addEventListener("click", e => {
+    const r = e.target.closest(".drow"); if (!r) return;
+    const d = document.querySelector(`.day[data-day="${r.dataset.day}"]`);
+    if (d) { $("stripWrap").scrollTo({ left: d.offsetLeft - 16, behavior: "smooth" }); $("stripWrap").scrollIntoView({ behavior: "smooth", block: "center" }); }
+  });
+
+  async function openNet() {
+    await fetchNets();
+    const list = (nets && nets.length ? nets : FALLBACK_NETS).slice().sort((a, b) => a.name.localeCompare(b.name, "da"));
+    const grp = (area, label) => `<optgroup label="${label}">` + list.filter(n => n.priceArea === area)
+      .map(n => `<option value="${n.id}"${n.id === net.id ? " selected" : ""}>${n.name}</option>`).join("") + "</optgroup>";
+    $("netSel").innerHTML = grp("DK2", "Østdanmark (DK2)") + grp("DK1", "Vestdanmark (DK1)");
+    $("netDlg").showModal();
+  }
+  $("netBtn").addEventListener("click", openNet);
+  $("netDlg").addEventListener("close", () => {
+    store.set("netChosen", true);
+    if ($("netDlg").returnValue !== "ok") return;
+    const list = nets && nets.length ? nets : FALLBACK_NETS;
+    const n = list.find(x => x.id === $("netSel").value);
+    if (!n || n.id === net.id) return;
+    net = n; store.set("net", net); selIdx = -1; data = null;
+    load(true);
+  });
+
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { load(false); render(); } });
+  setInterval(() => { if (!document.hidden) render(); }, 60e3);
+
+  load(false);
+  if (!store.get("netChosen")) setTimeout(openNet, 600);
+})();
+</script>
+</body>
+</html>
