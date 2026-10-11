@@ -141,8 +141,12 @@ footer a { color: inherit; }
 .hrow.use { grid-template-columns: 22px 1fr 44px 44px; }
 .hrow.use .kwh { text-align: right; font: 600 13px/1 var(--display); color: var(--fg); }
 .drow.use { grid-template-columns: 76px 1fr 62px; }
+.drow.use.mon { grid-template-columns: 96px 1fr 62px; }
 .ubar { height: 6px; border-radius: 4px; background: var(--track); }
 .ubar div { height: 100%; border-radius: 4px; background: var(--blue); min-width: 4px; }
+.mexp { background: #161618; border-top: 1px solid var(--line); }
+.mexp .drow { padding-left: 26px; }
+.mexp .dexp { padding-left: 26px; }
 .sum { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sum div { background: var(--panel); border-radius: 16px; padding: 10px 14px; }
 .sum span { display: block; font-size: 12px; color: var(--muted); }
@@ -249,9 +253,11 @@ footer a { color: inherit; }
   let mpId = store.get("eloMp") || "";
   let mps = store.get("eloMps") || [];
   let use = store.get("use");                     // { fetched, mpId, pts: [{t, q}] } pr. time
-  let hist = store.get("hist");                   // historiske priser til at regne kr
-  let useErr = "", useLoading = false, useDay = null;
-  const openUseDays = new Set();
+  let histM = store.get("histM");                 // historiske timepriser pr. måned til at regne kr
+  localStorage.removeItem("hist");
+  let useErr = "", useLoading = false, useDay = null, histProg = null;
+  const openUseDays = new Set(), openUseMonths = new Set();
+  let monthsInit = false;
 
   async function eloAccess(renew) {
     const c = store.get("eloAccess");
@@ -286,13 +292,18 @@ footer a { color: inherit; }
     if (!mpId) throw new Error("nomp");
   }
 
-  // fra den 1. i sidste måned til og med i går
-  const useRange = () => { const t = new Date(); return [new Date(t.getFullYear(), t.getMonth() - 1, 1), new Date(t.getFullYear(), t.getMonth(), t.getDate())]; };
+  // de seneste 12 måneder (inkl. den igangværende) til og med i går
+  const MONTHS = 12;
+  const useRange = () => { const t = new Date(); return [new Date(t.getFullYear(), t.getMonth() - (MONTHS - 1), 1), new Date(t.getFullYear(), t.getMonth(), t.getDate())]; };
+  const mKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 
+  // hele året hentes første gang; derefter kun fra den 1. i sidste måned
   async function fetchUsage() {
-    const [from, to] = useRange();
+    const [start, to] = useRange(), t = new Date();
+    const full = !use || use.mpId !== mpId || !use.from || use.from > keyOf(start);
+    const from = full ? start : new Date(t.getFullYear(), t.getMonth() - 1, 1);
     const j = await eloPost(`/meterdata/gettimeseries/${keyOf(from)}/${keyOf(to)}/Hour`, { meteringPoints: { meteringPoint: [mpId] } });
-    const m = new Map();
+    const m = new Map(full ? [] : use.pts.filter(p => p.t >= start.getTime() && p.t < from.getTime()).map(p => [p.t, p.q]));
     for (const r of j.result || []) {
       if (r.success === false) throw new Error("elo " + (r.errorText || "fejl"));
       for (const ts of r.MyEnergyData_MarketDocument?.TimeSeries || []) {
@@ -306,31 +317,56 @@ footer a { color: inherit; }
         }
       }
     }
-    use = { fetched: Date.now(), mpId, pts: [...m].sort((a, b) => a[0] - b[0]).map(([t, q]) => ({ t, q })) };
+    use = { fetched: Date.now(), mpId, from: keyOf(start), pts: [...m].sort((a, b) => a[0] - b[0]).map(([t, q]) => ({ t, q })) };
     store.set("use", use);
   }
 
-  async function fetchHistPrices() {
-    const [from, to] = useRange();
-    const url = `${API}/prices?supplierId=${encodeURIComponent(netId())}&from=${from.toISOString()}&to=${to.toISOString()}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(res.status === 429 ? "rate" : "http " + res.status);
-    const j = await res.json();
-    hist = { fetched: Date.now(), netId: netId(), from: keyOf(from), prices: (j.prices || []).map(p => ({
-      t: Date.parse(p.date), v: p.price.total, tax: p.details?.electricityTax?.total ?? 0
-    })) };
-    store.set("hist", hist);
+  // priser hentes en måned ad gangen (ca. 2 MB hver); afsluttede måneder gemmes og hentes aldrig igen
+  function histTodo(force) {
+    if (!histM || histM.netId !== netId()) histM = { netId: netId(), months: {} };
+    const t = new Date(), want = [];
+    for (let i = MONTHS - 1; i >= 0; i--) {
+      const a = new Date(t.getFullYear(), t.getMonth() - i, 1), b = new Date(t.getFullYear(), t.getMonth() - i + 1, 1);
+      want.push({ mk: mKey(a), a, b });
+    }
+    histM.months = Object.fromEntries(want.filter(w => histM.months[w.mk]).map(w => [w.mk, histM.months[w.mk]]));
+    return want.filter(w => {
+      const c = histM.months[w.mk];
+      return !c || (c.fetched < w.b.getTime() && (force || Date.now() - c.fetched > 12 * 3600e3));
+    });
+  }
+
+  async function fetchHistPrices(force) {
+    const todo = histTodo(force), queue = [...todo];
+    if (!todo.length) return;
+    histProg = { done: 0, n: todo.length };
+    const worker = async () => {
+      for (let w; (w = queue.shift());) {
+        const res = await fetch(`${API}/prices?supplierId=${encodeURIComponent(histM.netId)}&from=${w.a.toISOString()}&to=${w.b.toISOString()}`);
+        if (!res.ok) throw new Error(res.status === 429 ? "rate" : "http " + res.status);
+        const m = new Map();
+        for (const p of (await res.json()).prices || []) {
+          const t = Date.parse(p.date), h = t - t % 36e5, e = m.get(h) || [0, 0, 0];
+          e[0] += p.price.total; e[1] += p.details?.electricityTax?.total ?? 0; e[2]++; m.set(h, e);
+        }
+        const r4 = v => Math.round(v * 1e4) / 1e4;
+        histM.months[w.mk] = { fetched: Date.now(), h: [...m].map(([h, [v, tax, n]]) => [h, r4(v / n), r4(tax / n)]) };
+        store.set("histM", histM);
+        histProg.done++; render();
+      }
+    };
+    try { await Promise.all([worker(), worker(), worker()]); } finally { histProg = null; }
   }
 
   async function loadUsage(force) {
     if (!eloToken || useLoading) return;
     const stale = !use || use.mpId !== mpId || Date.now() - use.fetched > USE_MAX_AGE;
-    const hStale = !hist || hist.netId !== netId() || hist.from !== keyOf(useRange()[0]) || Date.now() - hist.fetched > 12 * 3600e3;
+    const hStale = histTodo(false).length > 0;
     if (!force && !stale && !hStale) return;
     useLoading = true; useErr = ""; render();
     try {
       if (!mpId || force) await fetchMeteringPoints();
-      await Promise.all([(force || stale) && fetchUsage(), (force || hStale) && fetchHistPrices()]);
+      await Promise.all([(force || stale) && fetchUsage(), (force || hStale) && fetchHistPrices(force)]);
     } catch (e) {
       useErr = e.message === "token" ? "Eloverblik afviste din token. Den er måske udløbet (de gælder et år) eller kopieret forkert. Lav en ny og indsæt den igen."
         : e.message === "nomp" ? "Der blev ikke fundet nogen målere på din token. Tjek at din adresse er tilknyttet i Eloverblik."
@@ -458,11 +494,9 @@ footer a { color: inherit; }
   // timepris (kr/kWh) for hver hel time i perioden
   function histHourPrices() {
     const m = new Map();
-    for (const p of hist?.prices || []) {
-      const h = p.t - p.t % 36e5, e = m.get(h) || [0, 0];
-      e[0] += priceOf(p); e[1]++; m.set(h, e);
-    }
-    return new Map([...m].map(([h, [s, n]]) => [h, s / n]));
+    for (const mo of Object.values(histM?.netId === netId() ? histM.months : {}))
+      for (const [h, v, tax] of mo.h) m.set(h, priceOf({ v, tax }));
+    return m;
   }
   const kwh = v => v.toLocaleString("da-DK", { minimumFractionDigits: v < 10 ? 2 : 1, maximumFractionDigits: v < 10 ? 2 : 1 });
   const krInt = v => Math.round(v).toLocaleString("da-DK");
@@ -509,18 +543,18 @@ footer a { color: inherit; }
       if (!byDay.has(k)) byDay.set(k, []);
       byDay.get(k).push(p);
     }
+    const krOf = (t, f = krInt) => t.qp >= t.q * 0.95 ? f(t.kr) : "–";   // vis ikke kr før priserne er hentet
     const tot = list => list.reduce((a, h) => { const p = hp.get(h.t); a.q += h.q; if (p != null) { a.kr += h.q * p; a.qp += h.q; } return a; }, { q: 0, kr: 0, qp: 0 });
     const days = [...byDay.keys()].sort().reverse();
     if (!useDay || !byDay.has(useDay)) useDay = days[0];
 
     // måneder
     const now = new Date();
-    const mKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
     const thisM = mKey(now), prevM = mKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
     const monthTot = mk => tot(use.pts.filter(p => mKey(new Date(p.t)) === mk));
     const mBox = (mk, label) => {
       const t = monthTot(mk);
-      return `<div><span>${label}</span><b>${krInt(t.kr)} kr</b><small>${kwh(t.q)} kWh${t.qp ? " · snit " + kr(t.kr / t.qp) + " kr" : ""}</small></div>`;
+      return `<div><span>${label}</span><b>${krOf(t)} kr</b><small>${kwh(t.q)} kWh${t.qp ? " · snit " + kr(t.kr / t.qp) + " kr" : ""}</small></div>`;
     };
     const mName = mk => cap(MO[+mk.slice(5) - 1]);
 
@@ -533,16 +567,35 @@ footer a { color: inherit; }
       return Math.round(dl.filter(h => hp.get(h.t) != null && hp.get(h.t) <= lo).reduce((s, h) => s + h.q, 0) / dt.q * 100);
     })();
 
-    const maxQ = Math.max(...days.map(d => tot(byDay.get(d)).q), 0.01);
+    // måned for måned, hver måned kan foldes ud til dage og hver dag til timer
+    const dayTot = new Map(days.map(d => [d, tot(byDay.get(d))]));
+    const months = [...new Set(days.map(d => d.slice(0, 7)))];
+    if (!monthsInit && months.length) { openUseMonths.add(months[0]); monthsInit = true; }
+    const sumT = ds => ds.reduce((a, d) => { const t = dayTot.get(d); a.q += t.q; a.kr += t.kr; a.qp += t.qp; return a; }, { q: 0, kr: 0, qp: 0 });
+    const monthDays = mk => days.filter(d => d.slice(0, 7) === mk);
+    const mTots = new Map(months.map(mk => [mk, sumT(monthDays(mk))]));
+    const maxM = Math.max(...[...mTots.values()].map(t => t.q), 0.01);
+    const yesterday = keyOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
     let rows = "";
-    for (const d of days.slice(0, 31)) {
-      const t = tot(byDay.get(d)), open = openUseDays.has(d);
-      rows += `<button type="button" class="drow use" data-uday="${d}" aria-expanded="${open}">
-        <div class="dname">${d === keyOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)) ? "I går" : cap(WD[dateOf(d).getDay()])}<span class="chev">▶</span><small>${shortDate(d)}</small></div>
+    for (const mk of months) {
+      const t = mTots.get(mk), open = openUseMonths.has(mk), md = monthDays(mk);
+      rows += `<button type="button" class="drow use mon" data-umonth="${mk}" aria-expanded="${open}">
+        <div class="dname">${mName(mk)}<span class="chev">▶</span><small>${mk.slice(0, 4)}${mk === thisM ? " · til nu" : ""}</small></div>
+        <div><div class="ubar"><div style="width:${t.q / maxM * 100}%"></div></div><div class="range-l"><span>${kwh(t.q)} kWh</span><span>${t.qp >= t.q * 0.95 ? "snit " + kr(t.kr / t.qp) + " kr" : ""}</span></div></div>
+        <div class="davg">${krOf(t)}<small>kr</small></div>
+      </button>`;
+      if (!open) continue;
+      const maxQ = Math.max(...md.map(d => dayTot.get(d).q), 0.01);
+      rows += `<div class="mexp">` + md.map(d => {
+        const t = dayTot.get(d), dOpen = openUseDays.has(d);
+        return `<button type="button" class="drow use" data-uday="${d}" aria-expanded="${dOpen}">
+        <div class="dname">${d === yesterday ? "I går" : cap(WD[dateOf(d).getDay()])}<span class="chev">▶</span><small>${shortDate(d)}</small></div>
         <div><div class="ubar"><div style="width:${t.q / maxQ * 100}%"></div></div><div class="range-l"><span>${kwh(t.q)} kWh</span></div></div>
-        <div class="davg">${kr(t.kr)}<small>kr</small></div>
-      </button>` + (open ? `<div class="dexp">${usageHours(byDay.get(d), hp)}</div>` : "");
+        <div class="davg">${krOf(t, kr)}<small>kr</small></div>
+      </button>` + (dOpen ? `<div class="dexp">${usageHours(byDay.get(d), hp)}</div>` : "");
+      }).join("") + `</div>`;
     }
+    const all = sumT(days);
     const mp = mps.find(m => m.id === mpId);
     return err + `<div class="sum">${mBox(thisM, mName(thisM) + " indtil nu")}${mBox(prevM, mName(prevM))}</div>
       <div class="dayhead"><h2>Seneste dag - ${cap(longDate(useDay))}</h2></div>
@@ -555,10 +608,12 @@ footer a { color: inherit; }
         ${usageHours(dl, hp)}
       </div>
       ${cheapShare != null ? `<div class="tip"><span class="t">Andel af forbruget i dagens billigste timer</span><b>${cheapShare} %</b><span class="p">${cheapShare >= 40 ? "flot timet" : cheapShare >= 33 ? "gennemsnitligt" : "kan flyttes"}</span></div>` : ""}
-      <div class="note">Seneste 31 dage. Tryk på en dag for at se forbruget time for time. Eloverblik er typisk 1-2 dage bagud.</div>
+      <div class="dayhead"><h2>Måned for måned</h2></div>
+      <div class="note">Tryk på en måned for at se dagene, og på en dag for at se timerne. Eloverblik er typisk 1-2 dage bagud.</div>
       <div class="days">${rows}</div>
+      <div class="tip"><span class="t">I alt ${shortDate(days[days.length - 1])} ${days[days.length - 1].slice(0, 4)} – ${shortDate(days[0])} ${days[0].slice(0, 4)}</span><b>${krOf(all)} kr</b><span class="p" style="color:var(--fg)">${krInt(all.q)} kWh</span></div>
       <div class="note">${mps.length > 1 ? `<select id="mpSel" class="btn" style="width:100%;margin-bottom:8px">${mps.map(m => `<option value="${m.id}"${m.id === mpId ? " selected" : ""}>${m.addr || m.id}</option>`).join("")}</select>` : mp ? `Måler: ${mp.addr || mp.id}<br>` : ""}
-        ${useLoading ? "Opdaterer …" : `Hentet kl. ${pad(new Date(use.fetched).getHours())}:${pad(new Date(use.fetched).getMinutes())}`} · <button class="linkbtn" type="button" id="useRefresh">Opdater</button> · <button class="linkbtn" type="button" id="tokForget">Fjern token</button></div>`;
+        ${histProg ? `Henter priser: ${histProg.done} af ${histProg.n} måneder …` : useLoading ? "Opdaterer …" : `Hentet kl. ${pad(new Date(use.fetched).getHours())}:${pad(new Date(use.fetched).getMinutes())}`} · <button class="linkbtn" type="button" id="useRefresh">Opdater</button> · <button class="linkbtn" type="button" id="tokForget">Fjern token</button></div>`;
   }
 
   function render() {
@@ -619,14 +674,14 @@ footer a { color: inherit; }
     }
     if (id === "tokForget") {
       eloToken = ""; mpId = ""; use = null; useErr = ""; mps = [];
-      ["eloToken", "eloAccess", "eloMp", "eloMps", "use"].forEach(k => localStorage.removeItem(k));
+      ["eloToken", "eloAccess", "eloMp", "eloMps", "use", "histM"].forEach(k => localStorage.removeItem(k));
       render(); return;
     }
     if (id === "useRefresh" || id === "useRetry") { loadUsage(true); return; }
     const u = e.target.closest(".drow.use");
     if (u) {
-      const d = u.dataset.uday;
-      if (openUseDays.has(d)) openUseDays.delete(d); else openUseDays.add(d);
+      const [set, k] = u.dataset.umonth ? [openUseMonths, u.dataset.umonth] : [openUseDays, u.dataset.uday];
+      if (set.has(k)) set.delete(k); else set.add(k);
       render(); return;
     }
     const r = e.target.closest(".drow"); if (!r) return;
