@@ -265,7 +265,7 @@ footer a { color: inherit; }
   }
   async function eloPost(path, body, retry = true) {
     const res = await fetch(ELO + path, {
-      method: "POST",
+      method: body ? "POST" : "GET",
       headers: { Authorization: "Bearer " + await eloAccess(!retry), "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     });
@@ -565,7 +565,10 @@ footer a { color: inherit; }
     document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
     document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.area === area));
     $("heatChk").checked = heat;
-    if (tab === "usage") { $("panel").innerHTML = usageView(); return; }
+    if (tab === "usage") {
+      if (!eloToken && $("tokIn")) return;   // tegn ikke formularen om, mens der indsættes en token
+      $("panel").innerHTML = usageView(); return;
+    }
     if (!data) { $("panel").innerHTML = '<div class="empty">Henter priser …</div>'; return; }
     aggregate(); computeLevels();
     $("panel").innerHTML = tab === "today" ? dayView(todayKey()) : tab === "tomorrow" ? dayView(tomorrowKey()) : weekView();
