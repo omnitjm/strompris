@@ -256,8 +256,7 @@ footer a { color: inherit; }
   let histM = store.get("histM");                 // historiske timepriser pr. måned til at regne kr
   localStorage.removeItem("hist");
   let useErr = "", useLoading = false, useDay = null, histProg = null;
-  const openUseDays = new Set(), openUseMonths = new Set();
-  let monthsInit = false;
+  const openUseDays = new Set(), openUseMonths = new Set();   // alt er foldet sammen fra start
 
   async function eloAccess(renew) {
     const c = store.get("eloAccess");
@@ -360,7 +359,7 @@ footer a { color: inherit; }
 
   async function loadUsage(force) {
     if (!eloToken || useLoading) return;
-    const stale = !use || use.mpId !== mpId || Date.now() - use.fetched > USE_MAX_AGE;
+    const stale = !use || use.mpId !== mpId || use.from !== keyOf(useRange()[0]) || Date.now() - use.fetched > USE_MAX_AGE;
     const hStale = histTodo(false).length > 0;
     if (!force && !stale && !hStale) return;
     useLoading = true; useErr = ""; render();
@@ -570,7 +569,6 @@ footer a { color: inherit; }
     // måned for måned, hver måned kan foldes ud til dage og hver dag til timer
     const dayTot = new Map(days.map(d => [d, tot(byDay.get(d))]));
     const months = [...new Set(days.map(d => d.slice(0, 7)))];
-    if (!monthsInit && months.length) { openUseMonths.add(months[0]); monthsInit = true; }
     const sumT = ds => ds.reduce((a, d) => { const t = dayTot.get(d); a.q += t.q; a.kr += t.kr; a.qp += t.qp; return a; }, { q: 0, kr: 0, qp: 0 });
     const monthDays = mk => days.filter(d => d.slice(0, 7) === mk);
     const mTots = new Map(months.map(mk => [mk, sumT(monthDays(mk))]));
