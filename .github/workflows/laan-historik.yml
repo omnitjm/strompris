@@ -1,0 +1,28 @@
+name: Boliglån – gem dagens kurser
+
+on:
+  schedule:
+    - cron: "50 15 * * 1-5"   # ca. 17:50 dansk tid, efter børsens lukning
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/laan_snapshot.py
+      - name: Commit hvis ændret
+        run: |
+          if ! git diff --quiet laan/history.json; then
+            git config user.name "laan-bot"
+            git config user.email "laan-bot@users.noreply.github.com"
+            git add laan/history.json
+            git commit -m "Boliglån: kurser $(date -u +%F)"
+            git push
+          fi

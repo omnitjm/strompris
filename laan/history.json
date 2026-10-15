@@ -1,0 +1,167 @@
+[
+ {
+  "date": "2026-09-25",
+  "k5_nasdaq": null,
+  "k4_nasdaq": 94.1,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-09-28",
+  "k5_nasdaq": 99.25,
+  "k4_nasdaq": 93.38,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-09-29",
+  "k5_nasdaq": 100.05,
+  "k4_nasdaq": 93.63,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-09-30",
+  "k5_nasdaq": 100.0,
+  "k4_nasdaq": 93.595,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-01",
+  "k5_nasdaq": 100.1,
+  "k4_nasdaq": 93.425,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-02",
+  "k5_nasdaq": 99.85,
+  "k4_nasdaq": 93.75,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-05",
+  "k5_nasdaq": 100.25,
+  "k4_nasdaq": 93.8,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-06",
+  "k5_nasdaq": 100.51,
+  "k4_nasdaq": 93.95,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-07",
+  "k5_nasdaq": 100.53,
+  "k4_nasdaq": 93.88,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-08",
+  "k5_nasdaq": 100.325,
+  "k4_nasdaq": 93.945,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-09",
+  "k5_nasdaq": 100.6,
+  "k4_nasdaq": 94.105,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-12",
+  "k5_nasdaq": 100.45,
+  "k4_nasdaq": 94.255,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-13",
+  "k5_nasdaq": 100.951,
+  "k4_nasdaq": 94.425,
+  "k5_tilbud": null,
+  "k4_tilbud": null,
+  "k5_aktuel": null,
+  "k4_aktuel": null,
+  "k5_aaben": null,
+  "k4_aaben": null
+ },
+ {
+  "date": "2026-10-14",
+  "k5_nasdaq": 100.95,
+  "k4_nasdaq": 94.435,
+  "k5_tilbud": 100.69,
+  "k4_tilbud": 94.37,
+  "k5_aktuel": 100.57,
+  "k4_aktuel": 94.06,
+  "k5_aaben": false,
+  "k4_aaben": true
+ },
+ {
+  "date": "2026-10-15",
+  "k5_nasdaq": null,
+  "k4_nasdaq": null,
+  "k5_tilbud": 100.69,
+  "k4_tilbud": 94.4,
+  "k5_aktuel": 101.18,
+  "k4_aktuel": 94.87,
+  "k5_aaben": false,
+  "k4_aaben": true
+ }
+]
