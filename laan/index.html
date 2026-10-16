@@ -111,14 +111,14 @@ footer a { color: inherit; }
 
   <footer>
     <div>Kilder: Totalkredits kursliste (live), Nasdaq Copenhagen (5NYK01EA59 og 4NYK01EA59), prognoser fra Nykredit, Realkredit Danmark, Danske Bank, Nordea, Jyske og AL Sydbank (september-oktober 2026).</div>
-    <div>Plan: 5 % åbner ved tilbudskurs ≤ 99,80 → tilbud og kurssikring samme dag. Stopgrænse 4 % = 93,20. Frist 31.10.2026.</div>
+    <div>Plan: 5 % åbner ved tilbudskurs ≤ 99,80 → tilbud og kurssikring samme dag. 4 %: kurssikr når aktuel kurs ≥ 96,0. Frist 31.10.2026 (så 4 % til dagskurs).</div>
     <div>Vejledende kurser, ikke et lånetilbud.</div>
   </footer>
 </div>
 
 <script>
 const API = 'https://www.totalkredit.dk/api/bondinformation/table?tableId=privat-udbetaling-af-laan-aktuelle-kurser-kunder&domain=totalkredit';
-const OPEN5 = 99.80, STOP4 = 93.20, FRIST = new Date('2026-10-31T23:59:59+01:00');
+const OPEN5 = 99.80, TAKE4 = 96.00, FRIST = new Date('2026-10-31T23:59:59+01:00');
 const fmt = (v, d = 2) => v == null ? '–' : v.toLocaleString('da-DK', { minimumFractionDigits: d, maximumFractionDigits: d });
 const kr = v => Math.round(v).toLocaleString('da-DK') + ' kr.';
 const num = s => s == null ? null : parseFloat(String(s).replace(/\./g, '').replace(',', '.'));
@@ -168,14 +168,16 @@ const chg = (a, b, d = 2, goodUp = true) => { if (a == null || b == null) return
 
 function bondCard(id, title, d, y, k) {
   const is5 = k === 'k5';
-  const thr = is5 ? OPEN5 : STOP4;
+  const thr = is5 ? OPEN5 : TAKE4;
+  const cur = is5 ? d.tilbud : d.aktuel;
+  const dist4 = TAKE4 - d.aktuel;
   const dist = d.tilbud - thr;
-  const lo = is5 ? 99.0 : 92.5, hi = is5 ? 101.8 : 96.0;
+  const lo = is5 ? 99.0 : 93.0, hi = is5 ? 101.8 : 97.0;
   const pos = v => Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100));
   const col = is5 ? 'var(--orange)' : 'var(--blue)';
   const distTxt = is5
     ? (d.aaben || d.tilbud <= OPEN5 ? '<b style="color:var(--orange)">Åben nu</b>' : `Mangler ${fmt(dist)} point for at åbne`)
-    : (d.tilbud < STOP4 ? '<b style="color:var(--blue)">Under stopgrænsen</b>' : `${fmt(dist)} point over stopgrænsen`);
+    : (d.aktuel >= TAKE4 ? '<b style="color:var(--blue)">Aktuel kurs har nået 96 – kurssikr 4 %</b>' : `Aktuel kurs mangler ${fmt(dist4)} point til 96,0, hvor vi tager 4 %`);
   $(id).innerHTML = `
     <div class="ctitle"><h2>${title}</h2><span class="pill ${d.aaben ? 'p-open' : 'p-closed'}">${d.aaben ? 'Åben' : 'Lukket'}</span></div>
     <div class="stats">
@@ -183,8 +185,8 @@ function bondCard(id, title, d, y, k) {
       <div class="stat"><b>${fmt(d.aktuel)}</b><span>Aktuel kurs</span><div>${chg(d.aktuel, y ? aktuelFor(y, k) : null, 2, !is5)}</div></div>
       <div class="stat"><b>${d.eff || '–'}</b><span>Effektiv rente</span></div>
     </div>
-    <div class="gauge"><div class="mark" style="left:${pos(thr)}%"></div><div class="now" style="left:${pos(d.tilbud)}%;background:${col}"></div></div>
-    <div class="gl"><span>${fmt(lo, 1)}</span><span>${is5 ? 'Åbner ved 99,80' : 'Stop ved 93,20'}</span><span>${fmt(hi, 1)}</span></div>
+    <div class="gauge"><div class="mark" style="left:${pos(thr)}%"></div><div class="now" style="left:${pos(cur)}%;background:${col}"></div></div>
+    <div class="gl"><span>${fmt(lo, 1)}</span><span>${is5 ? 'Åbner ved 99,80 (tilbudskurs)' : 'Tag 4 % ved 96,0 (aktuel kurs)'}</span><span>${fmt(hi, 1)}</span></div>
     <p class="note">${distTxt}. Ændring siden ${y ? wd(y.date) + ' ' + dk(y.date) : 'i går'}.${is5 ? ' Tilbudskursen bygger på gårsdagens gennemsnit, så aktuel kurs viser retningen for i morgen.' : ''}</p>`;
 }
 
@@ -196,10 +198,10 @@ function render() {
   const b = $('banner');
   const dage = Math.max(0, Math.ceil((FRIST - new Date()) / 864e5));
   if (k5 && (k5.aaben || k5.tilbud <= OPEN5)) { b.className = 'banner b-open'; b.innerHTML = '5 % er åben!<small>Ring til Jacob Jørgensen (96 63 24 97): lånetilbud og kurssikring i dag.</small>'; }
-  else if (k4 && k4.tilbud < STOP4) { b.className = 'banner b-stop'; b.innerHTML = '4 % har ramt stopgrænsen<small>Kurssikr 4 % i dag (Jacob, 96 63 24 97).</small>'; }
+  else if (k4 && k4.aktuel >= TAKE4) { b.className = 'banner b-stop'; b.innerHTML = '4 % har nået 96 – tag 4 %<small>Ring til Jacob (96 63 24 97) og kurssikr 4 % i dag, mens kursen er god.</small>'; }
   else if (dage === 0) { b.className = 'banner b-stop'; b.innerHTML = 'Fristen er nået<small>5 % åbnede ikke. Kurssikr 4 % (Jacob, 96 63 24 97).</small>'; }
-  else if ((k5 && (k5.tilbud <= 100.10 || k5.aktuel <= 100.30)) || (k4 && k4.tilbud <= 93.50)) { b.className = 'banner b-near'; b.innerHTML = (k5.tilbud <= 100.10 || k5.aktuel <= 100.30 ? '5 % nærmer sig åbning' : '4 % nærmer sig stopgrænsen') + `<small>Hold øje i dag. ${dage} dage til fristen 31.10.</small>`; }
-  else { b.className = 'banner b-wait'; b.innerHTML = `Vent – ingen handling i dag<small>5 % er lukket, og 4 % er over stopgrænsen. ${dage} dage til fristen 31.10.</small>`; }
+  else if ((k5 && (k5.tilbud <= 100.10 || k5.aktuel <= 100.30)) || (k4 && k4.aktuel >= 95.50)) { b.className = 'banner b-near'; b.innerHTML = (k5.tilbud <= 100.10 || k5.aktuel <= 100.30 ? '5 % nærmer sig åbning' : '4 % nærmer sig 96') + `<small>Hold øje i dag. ${dage} dage til fristen 31.10.</small>`; }
+  else { b.className = 'banner b-wait'; b.innerHTML = `Vent – ingen handling i dag<small>5 % er lukket, og 4 % er under 96. ${dage} dage til fristen 31.10.</small>`; }
 
   if (k5) bondCard('c5', 'Fast 5 % 2059', k5, y, 'k5');
   if (k4) bondCard('c4', 'Fast 4 % 2059', k4, y, 'k4');
