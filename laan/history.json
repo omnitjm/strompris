@@ -228,5 +228,15 @@
   "k4_aaben": true,
   "k5_nasdaq": 101.2,
   "k4_nasdaq": 94.745
+ },
+ {
+  "date": "2026-10-26",
+  "k5_tilbud": 101.0,
+  "k5_aktuel": 100.87,
+  "k5_aaben": false,
+  "k4_tilbud": 94.53,
+  "k4_aktuel": 94.44,
+  "k4_aaben": true,
+  "k4_nasdaq": 94.79
  }
 ]
