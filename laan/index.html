@@ -81,7 +81,7 @@ table.fc th { color: var(--muted); font-weight: 600; border-top: 0; }
 .summary p { margin: 0 0 6px; }
 table.pg { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; margin-top: 6px; }
 table.pg th, table.pg td { padding: 6px 3px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
-table.pg th:first-child, table.pg td:first-child { text-align: left; }
+table.pg th:first-child, table.pg td:first-child { text-align: left; white-space: normal; }
 table.pg th { color: var(--muted); font-weight: 600; border-top: 0; font-size: 11.5px; line-height: 1.25; vertical-align: bottom; }
 table.pg td small { display: block; color: var(--muted); font-size: 11px; }
 details.method { margin-top: 8px; }
@@ -120,16 +120,14 @@ footer a { color: inherit; }
 
   <section class="card">
     <div class="ctitle"><h2>Prognose 1-8 uger</h2></div>
-    <div class="seg" id="scen">
-      <button data-s="neutral" class="on">Neutral</button>
-      <button data-s="fald">Rente falder</button>
-      <button data-s="stig">Rente stiger</button>
-    </div>
     <div id="pchart"></div>
-    <div class="legend"><span><i style="background:rgb(47 140 255 / .22)"></i>80 % sandsynligt</span><span><i style="background:rgb(47 140 255 / .45)"></i>50 % sandsynligt</span><span><i style="background:#fff;height:2px"></i>Midtbud</span><span><i style="background:none;border-top:2px dashed var(--accent);height:0"></i>96,0</span><span><i style="background:none;border-top:2px dashed var(--orange);height:0"></i>5 % åbner</span></div>
+    <div class="legend"><span><i style="background:rgb(47 140 255 / .18)"></i>90 %</span><span><i style="background:rgb(47 140 255 / .3)"></i>80 %</span><span><i style="background:rgb(47 140 255 / .5)"></i>50 % sandsynligt</span><span><i style="background:#fff;height:2px"></i>Midtbud</span><span><i style="background:none;border-top:2px dashed var(--accent);height:0"></i>96,0</span><span><i style="background:none;border-top:2px dashed var(--orange);height:0"></i>5 % åbner (ca.)</span><span><i style="background:none;border-left:2px dotted var(--muted);width:0;height:10px"></i>ECB-møde</span></div>
     <div class="summary" id="psum"></div>
+    <div id="pprob"></div>
     <div id="ptab"></div>
-    <details class="method"><summary>Sådan er prognosen regnet</summary><div id="pmeth"></div></details>
+    <details class="method"><summary>Modellerne hver for sig</summary><div id="pmod"></div></details>
+    <details class="method"><summary>Test bagud: hvor godt har prognosen ramt?</summary><div id="ptest"></div></details>
+    <details class="method"><summary>Hvad driver kursen lige nu</summary><div id="pdrv"></div></details>
   </section>
 
   <section class="card">
@@ -162,16 +160,18 @@ belobEl.addEventListener('change', () => { const v = num(belobEl.value) || 0; lo
 const belob = () => +(localStorage.getItem('laan_belob') || 3000000);
 const hovedstol = (k, b = belob()) => b / ((k - 0.09) / 100);
 
-let live = null, hist = [];
+let live = null, hist = [], MODEL = null;
 
 async function load() {
   $('err').innerHTML = '';
   $('upd').textContent = 'Henter …';
   try {
-    const [t, h] = await Promise.all([
+    const [t, h, md] = await Promise.all([
       fetch(API, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('Totalkredit ' + r.status); return r.json(); }),
-      fetch('history.json?' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.json() : []).catch(() => [])
+      fetch('history.json?' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('model.json?' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
+    if (md && (!MODEL || md.opdateret !== MODEL.opdateret)) { MODEL = md; forbered(); }
     const e = {}; t.groups.forEach(g => g.entries.forEach(x => e[x.fondCode] = x));
     const pick = f => e[f] ? { tilbud: num(e[f].priceRate), aktuel: num(e[f].spotPriceRatePayment), aaben: !!e[f].isOpenForOffer, eff: e[f].effectiveRate } : null;
     live = { k5: pick('955620'), k4: pick('955299'), t: new Date() };
@@ -283,150 +283,271 @@ function render() {
 }
 
 // ---------- Prognose 1-8 uger ----------
-// Monte Carlo på 4 %-kursen: daglige udsving målt i historikken (fra april; marts var obligationens første, urolige uger),
-// t-fordelt med fede haler. 5 % følger 4 % med en hældning målt i historikken. Scenarierne lægger en fast retning på.
-const SCEN = {
-  neutral: { r: 0, txt: 'ingen fast retning: kursen svinger som hidtil, lige stor chance for op og ned' },
-  fald: { r: -0.10, txt: 'lang rente falder 0,10 point over 3 måneder (bankernes flertal)' },
-  stig: { r: 0.15, txt: 'lang rente stiger 0,15 point over 3 måneder (AL Sydbanks prognose)' }
-};
-const KURS_PR_PT = 11;           // 0,01 point højere rente ≈ 0,11 lavere kurs
-const N_SIM = 4000, UGER = 8, DF = 5;
-let scen = SCEN[localStorage.getItem('laan_scen')] ? localStorage.getItem('laan_scen') : 'neutral';
+// Parametre og dataserier kommer fra model.json (bygges dagligt af scripts/laan_model.py, som også tester modellen bagud).
+// Her simuleres 4 x 3.000 forløb af 4 %-kursen i handelsdage, forankret i dagens live-kurser:
+//   A = historiske 40-dages forløb (2022-2026) skaleret til dagens udsving, B = MA(1)-GARCH(1,1)-t,
+//   K = skjult kurs + støj (Kalman), C = rentemodel (kontrol). Samlet prognose = A, B og K med lige vægt.
+//   A og C centreres, så den historiske rentestigning ikke bygges ind; K har middelværdi nul, B kun en lille støjkorrektion.
+//   5 % = hældning x 4 %-bevægelse + egen bevægelse fra 2053/2056-parrene. Tilbudskurs = gårsdagens kurs + spænd.
+// Efterregnet af ChatGPT/Codex i to runder 9.11.2026; rettelser og åbne punkter står i scripts/laan_model.py.
+const SCEN = { neutral: { dy: 0 }, fald: { dy: -0.10 }, stig: { dy: 0.15 } };
+const H = 40, NPM = 3000, ECB_MOEDE = '2026-12-17';
+// Lukkedage på Nasdaq Copenhagen ud over weekender (model.json har den beregnede liste; denne er reserve)
+let LUKKET = new Set(['2026-12-24', '2026-12-25', '2026-12-31', '2027-01-01', '2027-03-25', '2027-03-26', '2027-03-29',
+  '2027-05-06', '2027-05-07', '2027-05-17', '2027-06-05', '2027-12-24', '2027-12-31']);
+const MOD_NAVN = { A: 'A: Historiske forløb', B: 'B: GARCH', K: 'K: Skjult kurs + støj', C: 'C: Rentemodel (kontrol)', ABK: 'Samlet (A + B + K)', naiv: 'Simpel (gammel)', lokal: 'Simpel med dagens udsving' };
+let scen = 'neutral';   // prognosen er altid neutral; bankscenarierne vises kun som information
+let SIM = null;
 
-function maalUdsving() {
-  const rows = hist.filter(r => r.date >= '2026-04-01');
-  const d = [], niv = [];
-  for (let i = 1; i < rows.length; i++) {
-    const a = rows[i - 1], b = rows[i];
-    if (a.k4_nasdaq != null && b.k4_nasdaq != null) d.push(b.k4_nasdaq - a.k4_nasdaq);
-    else if (a.k4_aktuel != null && b.k4_aktuel != null) d.push(b.k4_aktuel - a.k4_aktuel);
-  }
-  rows.forEach(r => { if (r.k4_nasdaq != null) niv.push(r.k4_nasdaq); });
-  if (d.length < 20) return { sigma: 0.29, sl: 0.29, se: 0.29, n: d.length, niv };
-  const sl = Math.sqrt(d.reduce((s, x) => s + x * x, 0) / d.length);
-  let v = d.slice(0, 20).reduce((s, x) => s + x * x, 0) / 20;
-  d.forEach(x => v = 0.94 * v + 0.06 * x * x);
-  const se = Math.sqrt(v);
-  return { sigma: Math.sqrt((sl * sl + se * se) / 2), sl, se, n: d.length, niv };
-}
-
-function maalBeta() {
-  const p = [];
-  hist.forEach(r => {
-    if (r.k4_nasdaq != null && r.k5_nasdaq != null) p.push([r.k4_nasdaq, r.k5_nasdaq]);
-    if (r.k4_aktuel != null && r.k5_aktuel != null) p.push([r.k4_aktuel, r.k5_aktuel]);
-  });
-  if (p.length < 8) return { b: 0.85, n: p.length };
-  const mx = p.reduce((s, q) => s + q[0], 0) / p.length, my = p.reduce((s, q) => s + q[1], 0) / p.length;
-  const b = p.reduce((s, q) => s + (q[0] - mx) * (q[1] - my), 0) / p.reduce((s, q) => s + (q[0] - mx) ** 2, 0);
-  return { b: Math.max(0.5, Math.min(1.0, b)), n: p.length };
-}
-
-function rng(seed) {
+function lavRng(seed) {
   let a = seed >>> 0, spare = null;
   const u = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const n = () => { if (spare != null) { const s = spare; spare = null; return s; } let x; do x = u(); while (x === 0); const r = Math.sqrt(-2 * Math.log(x)), f = 2 * Math.PI * u(); spare = r * Math.sin(f); return r * Math.cos(f); };
-  const tScale = Math.sqrt((DF - 2) / DF);
-  return () => { let c = 0; for (let i = 0; i < DF; i++) { const z = n(); c += z * z; } return n() / Math.sqrt(c / DF) * tScale; };
+  // Gamma(k,1) (Marsaglia-Tsang) -> t-fordeling med reelle frihedsgrader
+  const gam = k => { if (k < 1) return gam(k + 1) * Math.pow(u(), 1 / k); const d = k - 1 / 3, c = 1 / Math.sqrt(9 * d); for (;;) { let x, v; do { x = n(); v = 1 + c * x; } while (v <= 0); v = v * v * v; const uu = u(); if (uu < 1 - 0.0331 * x ** 4 || Math.log(uu) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v; } };
+  const t = nu => n() / Math.sqrt(2 * gam(nu / 2) / nu);
+  return { u, n, t, int: k => Math.floor(u() * k) };
+}
+// Samme EWMA som i Python: sig[i] = udsving kendt ved niveau i; sig[n] = i dag
+function ewma(dp, lam, init) {
+  let v = 0; for (let i = 0; i < init; i++) v += dp[i] * dp[i]; v /= init;
+  const sig = new Float64Array(dp.length + 1);
+  for (let i = 0; i < dp.length; i++) { sig[i] = Math.sqrt(v); v = lam * v + (1 - lam) * dp[i] * dp[i]; }
+  sig[dp.length] = Math.sqrt(v);
+  return sig;
+}
+const cumsum = a => { const L = new Float64Array(a.length + 1); for (let i = 0; i < a.length; i++) L[i + 1] = L[i] + a[i]; return L; };
+function centrer(d4) { const m = new Float64Array(H); for (let i = 0; i < d4.length; i++) m[i % H] += d4[i] / NPM; for (let i = 0; i < d4.length; i++) d4[i] -= m[i % H]; }
+
+function forbered() {
+  const M = MODEL, W0 = M.A.warm, lam = M.A.lam;
+  const r = lavRng([...M.opdateret].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261));
+  const L = cumsum(M.A.dp), sA = ewma(M.A.dp, lam, W0), nA = M.A.dp.length;
+  const Y = cumsum(M.C.dy), sY = ewma(M.C.dy, lam, W0), nY = M.C.dy.length;
+  const R = M.C.R, D = M.C.D_c ?? M.C.D, g = M.B, kf = M.K, k5 = M.k5;
+  if (M.data.lukket) LUKKET = new Set(M.data.lukket);
+  const sim = {};
+  for (const key of ['A', 'B', 'K', 'C']) {
+    const d4 = new Float32Array(NPM * H), eta = new Float32Array(NPM * H), b = new Float32Array(NPM);
+    for (let p = 0; p < NPM; p++) {
+      const o = p * H;
+      if (key === 'A') {
+        const s = W0 + r.int(nA - H - W0 + 1), k = sA[nA] / sA[s];
+        for (let d = 1; d <= H; d++) d4[o + d - 1] = (L[s + d] - L[s]) * k;
+      } else if (key === 'B') {
+        const sc = Math.sqrt((g.nu - 2) / g.nu);
+        let v = g.v_next, ep = g.e_last, cum = 0;
+        for (let d = 0; d < H; d++) { const e = Math.sqrt(v) * r.t(g.nu) * sc; cum += e + g.theta * ep; d4[o + d] = cum; ep = e; v = g.omega + g.alpha * e * e + g.beta * v; }
+      } else if (key === 'K') {
+        // Totalkredits aktuelle kurs behandles som den skjulte kurs (uden lukkekursstøj)
+        let cum = 0; const sq = Math.sqrt(kf.q);
+        for (let d = 0; d < H; d++) { cum += sq * r.n(); d4[o + d] = cum; }
+      } else {
+        const s = W0 + r.int(nY - H - W0 + 1), k = sY[nY] / sY[s], q = r.int(R.length - H);
+        for (let d = 1; d <= H; d++) d4[o + d - 1] = -D * (Y[s + d] - Y[s]) * k + (R[q + d] - R[q]);
+      }
+      // 5 %: usikker hældning + egen (centreret) bevægelse fra et af de analoge par
+      b[p] = Math.max(0.2, Math.min(1.0, k5.b5 + 0.12 * r.n()));
+      const par = k5.eta[r.int(k5.eta.length)], w = par.W[r.int(par.W.length)];
+      for (let d = 0; d < H; d++) eta[o + d] = w[d] * k5.eta_scale;
+    }
+    if (key === 'A' || key === 'C') centrer(d4);
+    sim[key] = { d4, eta, b };
+  }
+  SIM = sim;
 }
 
-function simuler(sigma, beta, base5) {
-  const { k4 } = live;
-  const drift = -SCEN[scen].r * KURS_PR_PT / 63;
-  const seed = [...new Date().toDateString() + scen].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261);
-  const t = rng(seed);
-  const slut = Array.from({ length: UGER + 1 }, () => new Float64Array(N_SIM));
-  const ramt96 = new Array(UGER + 1).fill(0), aaben5 = new Array(UGER + 1).fill(0);
-  for (let p = 0; p < N_SIM; p++) {
-    let cum = 0, r96 = k4.aktuel >= TAKE4, a5 = base5 <= OPEN5;
-    for (let dag = 1; dag <= UGER * 5; dag++) {
-      cum += drift + sigma * t();
-      if (k4.aktuel + cum >= TAKE4) r96 = true;
-      if (base5 + beta * cum <= OPEN5) a5 = true;
-      if (dag % 5 === 0) { const w = dag / 5; slut[w][p] = cum; ramt96[w] += r96; aaben5[w] += a5; }
+// Kalender i københavnsk tid: dagens dato, og antal handelsdage frem til en dato
+const idagCph = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
+const plusDage = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+function handelsdageTil(slut) {
+  let n = 0, d = idagCph();
+  while (d < slut) { d = plusDage(d, 1); const wd = new Date(d + 'T12:00:00Z').getUTCDay(); if (wd % 6 && !LUKKET.has(d)) n++; }
+  return n;
+}
+// Handelsdag (1..) for slutningen af hver kalenderuge 1-8 fra i dag
+const ugeHandelsdage = () => [0, 1, 2, 3, 4, 5, 6, 7, 8].map(w => Math.min(H, handelsdageTil(plusDage(idagCph(), 7 * w))));
+
+// Statistik pr. kalenderuge for en eller flere modeller, forankret i live-kurserne. opt: { b5, basis5 } til følsomhed.
+function beregn(keys, opt = {}) {
+  const skala = opt.skala ?? 1;
+  const { k4, k5 } = live, M = MODEL;
+  const drift = -SCEN[scen].dy * M.C.D / 63;
+  const base5 = opt.basis5 ?? (k5.aktuel + M.spaend.s5);      // skønnet næste tilbudskurs på 5 % (uden bevægelse)
+  const aaben5Nu = k5.aaben || k5.tilbud <= OPEN5, naaet96Nu = k4.aktuel >= TAKE4;
+  const UD = ugeHandelsdage(), slutDag = {}; UD.forEach((d, w) => { if (w) slutDag[d] = (slutDag[d] || []).concat(w); });
+  const n = keys.length * NPM;
+  const slut = Array.from({ length: 9 }, () => new Float64Array(n));
+  const r96 = new Array(9).fill(0), a5 = new Array(9).fill(0);
+  let i = 0;
+  for (const key of keys) {
+    const { d4, eta, b } = SIM[key];
+    for (let p = 0; p < NPM; p++, i++) {
+      let t96 = naaet96Nu, t5 = aaben5Nu, x5prev = 0;
+      const o = p * H, bp = opt.b5 != null ? opt.b5 : b[p];
+      for (let d = 1; d <= UD[8]; d++) {
+        const x = d4[o + d - 1] * skala + drift * d;
+        if (k4.aktuel + x >= TAKE4) t96 = true;
+        if (base5 + x5prev <= OPEN5) t5 = true;        // tilbudskursen i dag bygger på gårsdagens kurs
+        x5prev = bp * x + eta[o + d - 1];
+        const ws = slutDag[d];
+        if (ws) for (const w of ws) { slut[w][i] = x; r96[w] += t96; a5[w] += t5; }
+      }
     }
   }
-  const q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(f * arr.length))];
-  return slut.map((arr, w) => {
-    if (w === 0) return { w, q10: 0, q25: 0, q50: 0, q75: 0, q90: 0, p96: +(k4.aktuel >= TAKE4), p5: +(base5 <= OPEN5), op: 0.5 };
-    arr.sort();
-    return { w, q10: q(arr, .1), q25: q(arr, .25), q50: q(arr, .5), q75: q(arr, .75), q90: q(arr, .9),
-      p96: ramt96[w] / N_SIM, p5: aaben5[w] / N_SIM, op: arr.filter(x => x > 0).length / N_SIM };
+  const q = (a, f) => a[Math.min(a.length - 1, Math.floor(f * a.length))];
+  return slut.map((a, w) => {
+    if (w === 0) return { w, dag: 0, q05: 0, q10: 0, q25: 0, q50: 0, q75: 0, q90: 0, q95: 0, p96: +naaet96Nu, p5: +aaben5Nu, op: 0.5 };
+    a.sort();
+    return { w, dag: UD[w], q05: q(a, .05), q10: q(a, .1), q25: q(a, .25), q50: q(a, .5), q75: q(a, .75), q90: q(a, .9), q95: q(a, .95),
+      p96: r96[w] / n, p5: a5[w] / n, op: a.filter(x => x > 0).length / n };
   });
+}
+
+function scenTab() {
+  const rows = [];
+  for (const k of ['fald', 'stig']) { scen = k; rows.push([k, beregn(['A', 'B', 'K'])]); }
+  scen = 'neutral';
+  const pct = x => Math.round(x * 100) + ' %', A = x => live.k4.aktuel + x;
+  return `<p class="note"><b>Hvis bankerne får ret</b> (kun til orientering, indgår ikke i prognosen):</p>
+    <table class="pg"><tr><th>Hvis</th><th>4 % om<br>8 uger</th><th>96 inden<br>8 uger</th><th>5 % inden<br>8 uger</th></tr>` +
+    rows.map(([k, r]) => `<tr><td>${k === 'fald' ? 'Renten falder 0,10 over 3 mdr. (flertallet)' : 'Renten stiger 0,15 over 3 mdr. (AL Sydbank)'}</td><td>${fmt(A(r[8].q50))}</td><td>${pct(r[8].p96)}</td><td>${pct(r[8].p5)}</td></tr>`).join('') + '</table>';
 }
 
 function renderPrognose() {
   const { k4, k5 } = live;
   if (!k4 || !k5) return;
-  document.querySelectorAll('#scen button').forEach(b => b.classList.toggle('on', b.dataset.s === scen));
-  const u = maalUdsving(), bt = maalBeta();
-  const base5 = Math.min(k5.tilbud, k5.aktuel);
-  const niv5 = k4.aktuel + (OPEN5 - base5) / bt.b;   // 4 %-kurs hvor 5 % ca. åbner
-  const res = simuler(u.sigma, bt.b, base5);
+  if (!MODEL || !SIM) { $('psum').innerHTML = '<p class="note">Prognosemodellen kunne ikke hentes. Prøv Opdater.</p>'; return; }
+  const M = MODEL;
+  const res = beregn(['A', 'B', 'K']);
   const B = belob();
   const kt = k => hovedstol(k, B) - B;
-  const pct = x => x < 0.005 ? '< 1\u00a0%' : x > 0.995 ? '> 99\u00a0%' : Math.round(x * 100) + '\u00a0%';
-  const ugeDato = w => { const d = new Date(); d.setDate(d.getDate() + 7 * w); return `${d.getDate()}/${d.getMonth() + 1}`; };
-  const A = x => k4.aktuel + x, T = x => k4.tilbud + x;
+  const pct = x => x < 0.005 ? '< 1 %' : x > 0.995 ? '> 99 %' : Math.round(x * 100) + ' %';
+  const ugeDato = w => dk(plusDage(idagCph(), 7 * w));
+  const A = x => k4.aktuel + x;
+  const base5 = k5.aktuel + M.spaend.s5;
+  const niv5 = k4.aktuel + (OPEN5 - base5) / M.k5.b5;
+  const UD = res.map(r => r.dag);
 
-  // Graf: aktuel 4 %-kurs, historik + vifte
+  // ---- Vifte-graf: aktuel 4 %-kurs (x-akse i handelsdage) ----
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
   const hp = hist.filter(r => r.date < today).map(r => aktuelFor(r, 'k4')).filter(v => v != null).slice(-20);
   const nH = hp.length;
   const c = $('pchart'); c.innerHTML = '';
-  const W = 520, H = 220, m = { l: 40, r: 10, t: 12, b: 24 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
-  const ys = [...hp, A(res[UGER].q10), A(res[UGER].q90), TAKE4, k4.aktuel];
-  if (niv5 > Math.min(...ys) - 1.5) ys.push(niv5);
+  const W = 520, Hh = 230, m = { l: 40, r: 10, t: 12, b: 24 }, iw = W - m.l - m.r, ih = Hh - m.t - m.b;
+  const ys = [...hp, A(res[8].q05), A(res[8].q95), TAKE4, k4.aktuel];
+  if (niv5 > Math.min(...ys) - 1) ys.push(niv5);
   const lo = Math.floor((Math.min(...ys) - 0.2) * 2) / 2, hi = Math.ceil((Math.max(...ys) + 0.2) * 2) / 2;
-  const x0 = -nH, x1 = UGER * 5;
+  const x0 = -nH, x1 = UD[8];
   const x = d => m.l + (d - x0) / (x1 - x0) * iw, y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
-  const s = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Prognose for aktuel kurs på 4 % de næste 8 uger' }, c);
+  const s = el('svg', { viewBox: `0 0 ${W} ${Hh}`, role: 'img', 'aria-label': 'Prognose for aktuel kurs på 4 % de næste 8 uger' }, c);
   const step = (hi - lo) > 4 ? 1 : 0.5;
   for (let v = lo; v <= hi + 1e-9; v += step) { el('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'rgb(255 255 255 / .07)' }, s); const tx = el('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end' }, s); tx.textContent = fmt(v, step < 1 ? 1 : 0); }
-  const band = (a, b, fill) => { const top = res.map(r => `${x(r.w * 5)},${y(A(r[b]))}`), bot = res.slice().reverse().map(r => `${x(r.w * 5)},${y(A(r[a]))}`); el('polygon', { points: [...top, ...bot].join(' '), fill }, s); };
-  band('q10', 'q90', 'rgb(47 140 255 / .22)');
-  band('q25', 'q75', 'rgb(47 140 255 / .45)');
+  const band = (a, b, fill) => { const top = res.map(r => `${x(r.dag)},${y(A(r[b]))}`), bot = res.slice().reverse().map(r => `${x(r.dag)},${y(A(r[a]))}`); el('polygon', { points: [...top, ...bot].join(' '), fill }, s); };
+  band('q05', 'q95', 'rgb(47 140 255 / .18)');
+  band('q10', 'q90', 'rgb(47 140 255 / .3)');
+  band('q25', 'q75', 'rgb(47 140 255 / .5)');
   el('line', { x1: m.l, x2: W - m.r, y1: y(TAKE4), y2: y(TAKE4), stroke: '#ffd60a', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, s);
   if (niv5 >= lo && niv5 <= hi) el('line', { x1: m.l, x2: W - m.r, y1: y(niv5), y2: y(niv5), stroke: '#ff9f0a', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, s);
+  const ecb = handelsdageTil(ECB_MOEDE);
+  if (ecb > 0 && ecb <= UD[8]) { el('line', { x1: x(ecb), x2: x(ecb), y1: m.t, y2: m.t + ih, stroke: '#8e8e93', 'stroke-width': 1.2, 'stroke-dasharray': '2 3' }, s); const tx = el('text', { x: x(ecb) + 3, y: m.t + 10 }, s); tx.textContent = 'ECB 17/12'; }
   el('line', { x1: x(0), x2: x(0), y1: m.t, y2: m.t + ih, stroke: 'rgb(255 255 255 / .25)' }, s);
   if (nH) el('path', { d: [...hp, k4.aktuel].map((v, i) => (i ? 'L' : 'M') + x(i - nH) + ',' + y(v)).join(''), fill: 'none', stroke: '#2f8cff', 'stroke-width': 2, 'stroke-linejoin': 'round' }, s);
-  el('path', { d: res.map((r, i) => (i ? 'L' : 'M') + x(r.w * 5) + ',' + y(A(r.q50))).join(''), fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-dasharray': '1 0' }, s);
+  el('path', { d: res.map((r, i) => (i ? 'L' : 'M') + x(r.dag) + ',' + y(A(r.q50))).join(''), fill: 'none', stroke: '#fff', 'stroke-width': 2 }, s);
   el('circle', { cx: x(0), cy: y(k4.aktuel), r: 4.5, fill: '#2f8cff', stroke: '#1c1c1e', 'stroke-width': 2 }, s);
-  [[-nH, nH ? `${nH} dage før` : ''], [0, 'I dag'], [10, '+2 uger'], [20, '+4 uger'], [40, '+8 uger']].forEach(([d, l]) => { if (!l) return; const tx = el('text', { x: x(d), y: H - 6, 'text-anchor': d === -nH ? 'start' : d === 40 ? 'end' : 'middle' }, s); tx.textContent = l; });
+  [[-nH, nH ? `${nH} dage før` : ''], [0, 'I dag'], [UD[2], '+2 uger'], [UD[4], '+4 uger'], [UD[8], '+8 uger']].forEach(([d, l]) => { if (!l) return; const tx = el('text', { x: x(d), y: Hh - 6, 'text-anchor': d === -nH ? 'start' : d === UD[8] ? 'end' : 'middle' }, s); tx.textContent = l; });
 
-  // Opsummering
+  // ---- Opsummering ----
   const r1 = res[1], r4 = res[4], r8 = res[8];
   const iv = r => `${fmt(A(r.q10))}-${fmt(A(r.q90))}`;
-  const ktNu = kt(k4.tilbud), kt4 = kt(T(r4.q50));
   $('psum').innerHTML = `
-    <p>Aktuel kurs på 4 % er <b>${fmt(k4.aktuel)}</b>. Med 80 % sandsynlighed ligger den om 1 uge mellem <b>${iv(r1)}</b>, om 4 uger mellem <b>${iv(r4)}</b> og om 8 uger mellem <b>${iv(r8)}</b>.</p>
+    <p>Aktuel kurs på 4 % er <b>${fmt(k4.aktuel)}</b>. Med 80 % sandsynlighed ligger den om 1 uge mellem <b>${iv(r1)}</b>, om 4 uger mellem <b>${iv(r4)}</b> og om 8 uger (${ugeDato(8)}, ${UD[8]} handelsdage pga. jul og nytår) mellem <b>${iv(r8)}</b>.</p>
     <p>Chance for, at 4 % når <b>96,0</b> mindst én dag: <b>${pct(res[2].p96)}</b> inden for 2 uger, <b>${pct(r4.p96)}</b> inden for 4 uger og <b>${pct(r8.p96)}</b> inden for 8 uger.</p>
-    <p>Chance for, at <b>5 % åbner</b>: <b>${pct(r4.p5)}</b> inden for 4 uger og <b>${pct(r8.p5)}</b> inden for 8 uger. Det kræver, at 4 % falder til ca. <b>${fmt(niv5)}</b> (${fmt(k4.aktuel - niv5)} point lavere end nu).</p>
-    <p>Chance for en bedre 4 %-kurs end i dag om 4 uger: <b>${pct(r4.op)}</b>. Midtbuddet for kurstabet om 4 uger er <b>${kr(kt4)}</b> (i dag ${kr(ktNu)}).</p>`;
+    <p>Chance for, at <b>5 % åbner</b>: <b>${pct(r4.p5)}</b> inden for 4 uger og <b>${pct(r8.p5)}</b> inden for 8 uger. 5 % flytter sig ca. ${fmt(M.k5.b5)} point pr. point i 4 %, så 4 % skal typisk ned omkring <b>${fmt(niv5)}</b>, før 5 % åbner. Tallet er usikkert (se "Hvad driver kursen").</p>
+    <p>Chance for en bedre 4 %-kurs end i dag om 4 uger: <b>${pct(r4.op)}</b>. Midtbuddet for kurstabet ved kurssikring om 4 uger er <b>${kr(kt(A(r4.q50)))}</b> (i dag ${kr(kt(k4.aktuel))}).</p>`;
 
-  // Tabel uge for uge
+  // ---- Sandsynligheder uge for uge (graf) ----
+  {
+    const c2 = $('pprob'); c2.innerHTML = '';
+    const W2 = 520, H2 = 150, m2 = { l: 40, r: 10, t: 10, b: 22 }, iw2 = W2 - m2.l - m2.r, ih2 = H2 - m2.t - m2.b;
+    const s2 = el('svg', { viewBox: `0 0 ${W2} ${H2}`, role: 'img', 'aria-label': 'Chance for 96 og for at 5 % åbner, uge for uge' }, c2);
+    const xx = w => m2.l + w / 8 * iw2, yy = p => m2.t + ih2 - p * ih2;
+    [0, .25, .5, .75, 1].forEach(p => { el('line', { x1: m2.l, x2: W2 - m2.r, y1: yy(p), y2: yy(p), stroke: 'rgb(255 255 255 / .07)' }, s2); const t = el('text', { x: m2.l - 6, y: yy(p) + 4, 'text-anchor': 'end' }, s2); t.textContent = p * 100 + ' %'; });
+    [['p96', '#ffd60a'], ['p5', '#ff9f0a']].forEach(([k, col]) => {
+      el('path', { d: res.map((r, i) => (i ? 'L' : 'M') + xx(r.w) + ',' + yy(r[k])).join(''), fill: 'none', stroke: col, 'stroke-width': 2 }, s2);
+      res.forEach(r => el('circle', { cx: xx(r.w), cy: yy(r[k]), r: 2.5, fill: col }, s2));
+    });
+    [0, 2, 4, 6, 8].forEach(w => { const t = el('text', { x: xx(w), y: H2 - 5, 'text-anchor': w ? (w === 8 ? 'end' : 'middle') : 'start' }, s2); t.textContent = w ? `uge ${w}` : 'nu'; });
+    c2.insertAdjacentHTML('beforeend', `<div class="legend"><span><i style="background:#ffd60a;height:2px"></i>4 % har nået 96</span><span><i style="background:#ff9f0a;height:2px"></i>5 % er åbnet</span></div>`);
+  }
+
+  // ---- Tabel uge for uge ----
   let tb = `<table class="pg"><tr><th>Uge</th><th>4 % aktuel<br>midtbud</th><th>Har nået<br>96</th><th>5 %<br>åbner</th><th>Kurstab<br>midtbud</th></tr>`;
   res.slice(1).forEach(r => {
     tb += `<tr><td>${r.w} <small>${ugeDato(r.w)}</small></td>
       <td>${fmt(A(r.q50))}<small>${fmt(A(r.q10))}-${fmt(A(r.q90))}</small></td>
       <td>${pct(r.p96)}</td><td>${pct(r.p5)}</td>
-      <td>${Math.round(kt(T(r.q50)) / 1000)}k<small>${Math.round(kt(T(r.q90)) / 1000)}k-${Math.round(kt(T(r.q10)) / 1000)}k</small></td></tr>`;
+      <td>${Math.round(kt(A(r.q50)) / 1000)}k<small>${Math.round(kt(A(r.q90)) / 1000)}k-${Math.round(kt(A(r.q10)) / 1000)}k</small></td></tr>`;
   });
-  $('ptab').innerHTML = tb + `</table><p class="note">Lille tal under kursen = 80 %-interval. "Har nået 96" og "5 % åbner" = chancen for, at det sker mindst én dag inden udgangen af ugen. Kurstab regnes på tilbudskursen (nu ${fmt(k4.tilbud)}) og et udbetalt beløb på ${kr(B)}</p>`;
+  $('ptab').innerHTML = tb + `</table><p class="note">Lille tal = 80 %-interval. "Har nået 96" og "5 % åbner" = chancen for, at det sker mindst én dag inden udgangen af ugen. Kurstab ved kurssikring regnes på aktuel kurs og et udbetalt beløb på ${kr(B)} Prognosen antager ingen fast retning for renten.</p>`;
 
-  // Metode og træfsikkerhed bagud
-  const z80 = 1.476 * Math.sqrt((DF - 2) / DF);
-  const hit = h => { const v = u.niv; let i = 0, n = 0; for (let k = 0; k + h < v.length; k++) { n++; if (Math.abs(v[k + h] - v[k]) <= z80 * u.sl * Math.sqrt(h)) i++; } return n ? Math.round(i / n * 100) + ' %' : '–'; };
-  $('pmeth').innerHTML = `
-    <p class="note"><b>Model.</b> 4 000 simulerede forløb af 4 %-kursen, dag for dag i 40 handelsdage. Hvert dagligt udsving trækkes fra en t-fordeling (fede haler, så store hop som i marts er med). Udsvinget pr. dag er <b>${fmt(u.sigma)}</b> kurspoint: et gennemsnit af hele perioden siden 1.4.2026 (${fmt(u.sl)}, ${u.n} handelsdage) og de seneste uger (${fmt(u.se)}).</p>
-    <p class="note"><b>Retning.</b> Scenarie: ${SCEN[scen].txt}. ${SCEN[scen].r ? `Det flytter 4 % ${fmt(-SCEN[scen].r * KURS_PR_PT * 40 / 63)} kurspoint over 8 uger.` : ''} Ingen kan forudsige renten. Prognosen viser især, hvor meget kursen plejer at svinge.</p>
-    <p class="note"><b>5 %.</b> 5 %-kursen flytter sig ${fmt(bt.b)} point, hver gang 4 % flytter sig 1 point (målt på ${bt.n} dage). 5 % regnes som åben, når tilbudskursen kommer ned på 99,80.</p>
-    <p class="note"><b>Træfsikkerhed.</b> Hvis 80 %-intervallet var brugt siden april, havde det ramt den faktiske kurs ${hit(5)} af gangene efter 1 uge, ${hit(20)} efter 4 uger og ${hit(40)} efter 8 uger. Målet er 80 %.</p>
-    <p class="note">Det er en statistisk prognose, ikke rådgivning. Store nyheder (ECB, inflationstal, uro på markedet) kan flytte kursen mere, end modellen regner med.</p>`;
+  // ---- Modellerne hver for sig ----
+  const rm = { A: beregn(['A']), B: beregn(['B']), K: beregn(['K']), C: beregn(['C']), ABK: res };
+  let mt = `<table class="pg"><tr><th>Model</th><th>Om 4 uger</th><th>Om 8 uger</th><th>96 inden<br>8 uger</th><th>5 % inden<br>8 uger</th></tr>`;
+  for (const k of ['A', 'B', 'K', 'C', 'ABK']) {
+    const a = rm[k][4], b = rm[k][8], st = k === 'ABK' ? ' style="font-weight:700"' : '';
+    mt += `<tr${st}><td>${MOD_NAVN[k]}</td><td>${fmt(A(a.q50))}<small>${fmt(A(a.q10))}-${fmt(A(a.q90))}</small></td><td>${fmt(A(b.q50))}<small>${fmt(A(b.q10))}-${fmt(A(b.q90))}</small></td><td>${pct(b.p96)}</td><td>${pct(b.p5)}</td></tr>`;
+  }
+  const kd = M.data.kilder;
+  $('pmod').innerHTML = mt + `</table>
+    <p class="note"><b>A</b> trækker 3.000 tilfældige 8-ugers forløb fra 4 %-kursens historik siden ${dk(M.data.proxy_fra)} ${M.data.proxy_fra.slice(0, 4)} (${M.data.n_dage} handelsdage) og skalerer dem til dagens udsving. Historikken er kædet dag for dag: 4 % 2059 fra april 2026 (${kd['2059']} dage), ellers 4 % 2056 (${kd['2056']}) og 4 % 2053 (${kd['2053']}). Søsterobligationerne følger 2059 næsten 1:1 over uger. Forløbene er centreret, så den rentestigning, der var i perioden, ikke bygges ind som retning.</p>
+    <p class="note"><b>B</b> er en statistisk model, hvor udsvingene skifter mellem rolige og urolige perioder (GARCH). Den har fede haler (t-fordeling med ${fmt(M.B.nu, 1)} frihedsgrader) og tager højde for, at lukkekurserne er støjfyldte, så et udsving ofte delvist rettes ud dagen efter.</p>
+    <p class="note"><b>K</b> er samme modeltype som ChatGPT/Codex brugte i sin uafhængige efterregning, men med egne valg: en skjult "rigtig" kurs, der bevæger sig tilfældigt (${fmt(Math.sqrt(M.K.q))} point pr. dag), plus støj i lukkekursen (${fmt(Math.sqrt(M.K.r))} point). Den er fittet på de seneste 150 handelsdage. Totalkredits aktuelle kurs behandles som den skjulte kurs.</p>
+    <p class="note"><b>C</b> bygger på 20 års ECB-renter (10 år, siden ${M.data.y10_fra.slice(0, 4)}) gange den målte rentefølsomhed plus realkreditobligationernes egne bevægelser. Den indgår kun som kontrol.</p>
+    <p class="note">Den samlede prognose blander A, B og K med faste, lige vægte. Vægtene er ikke tilpasset testen, men K blev tilføjet efter første gennemgang af de samme data. Testen er derfor ikke helt "urørt".</p>`;
+
+  // ---- Test bagud ----
+  const tm = M.test.modeller, bs = M.test.bootstrap;
+  const P = x => Math.round(x * 100);
+  const cov = (k, w) => tm[k][w] ? P(tm[k][w].cov80) : '–';
+  const skL = k => { const b = bs[k] && bs[k]['8']; if (!b || k === 'lokal') return '–'; return `${b.skill_lokal_pkt >= 0 ? '+' : ''}${fmt(b.skill_lokal_pkt * 100, 1)} %<small>${fmt(b.skill_lokal[0] * 100, 1)} til ${fmt(b.skill_lokal[1] * 100, 1)}</small>`; };
+  const tc = (k, e) => { const x = tm[k].touch[e]; return x ? `${P(x.p)}/${P(x.o)}` : '–'; };
+  let tt = `<table class="pg"><tr><th>Model</th><th>80 %-interval<br>1 · 4 · 8 uger</th><th>Bedre end<br>dagens udsv.</th><th>Op · ned<br>sagt/sket</th></tr>`;
+  for (const k of ['naiv', 'lokal', 'A', 'B', 'K', 'C', 'ABK']) {
+    tt += `<tr${k === 'ABK' ? ' style="font-weight:700"' : ''}><td>${MOD_NAVN[k]}</td><td>${cov(k, '1')} · ${cov(k, '4')} · ${cov(k, '8')}\u00a0%</td><td>${skL(k)}</td><td>${tc(k, 'op1_8u')}<small>${tc(k, 'ned15_8u')}</small></td></tr>`;
+  }
+  const e8 = bs.ABK && bs.ABK['8'], e1 = bs.ABK && bs.ABK['1'];
+  $('ptest').innerHTML = tt + `</table>
+    <p class="note">Modellerne er kørt igen på ${M.test.n_start} startdage fra ${dk(M.test.fra)} ${M.test.fra.slice(0, 4)} til ${dk(M.test.til)} ${M.test.til.slice(0, 4)} (${tm.ABK['8'].n} med et kendt udfald 8 uger senere). Hver gang fik de kun de data, der fandtes den dag, også til omregningen fra 2053. Derefter blev prognosen sammenlignet med, hvad kursen faktisk gjorde 1, 4 og 8 kalenderuger senere.</p>
+    <p class="note"><b>80 %-interval ramte</b> skal helst ligge omkring 80 %. For den samlede model er usikkerheden på 8-ugers-tallet ${P(e8.cov80[0])}-${P(e8.cov80[1])} % (blok-bootstrap). <b>Bedre end dagens udsving</b> (8 uger) er, hvor meget mindre fejl (CRPS) modellen har end en simpel model, der bare bruger dagens udsving. Plus er bedre, og det lille tal er et 90 %-usikkerhedsinterval. <b>Op · ned</b> (øverst op 1 point, nederst ned 1,5 point) er den gennemsnitlige forudsagte chance for at ramme et niveau 1 point over eller 1,5 point under startkursen inden for 8 uger, sammenlignet med hvor ofte det skete (i %).</p>
+    <p class="note"><b>Konklusion:</b> Den gamle simple model overvurderede chancerne kraftigt, fordi lukkekurserne er støjfyldte. Den samlede model rammer intervallerne og "op"-chancen godt. Den er en smule bedre end den simple model med dagens udsving på 1 uges sigt (${fmt(e1.skill_lokal_pkt * 100, 1)} %), men på 4-8 uger er forskellen ikke målbar. Den undervurderede "ned"-chancen lidt, fordi renterne steg i testperioden, og det forudsætter modellen bevidst ikke.</p>
+    <p class="note"><b>Forbehold:</b> prognoserne overlapper, så der er reelt kun ca. 14 uafhængige 8-ugers perioder. Testen måler Nasdaq-lukkekurser, mens appen viser Totalkredits aktuelle kurs. 5 %-åbninger kan slet ikke testes bagud, fordi der ikke er historik for dem.</p>`;
+
+  // ---- Drivere ----
+  const halv = Math.log(0.5) / Math.log(M.B.alpha + M.B.beta);
+  const s5 = [[0.35, '0,35'], [0.5, '0,50'], [0.7, '0,70'], [0.9, '0,90']].map(([b, l]) => [l, beregn(['A', 'B', 'K'], { b5: b })[8].p5]);
+  const sBase = beregn(['A', 'B', 'K'], { basis5: k5.tilbud })[8].p5;
+  const tn = M.data.tk_vs_nq;
+  const tkS = tn && tn.sd_tk < tn.sd_nq ? { f: tn.sd_tk / tn.sd_nq, r: beregn(['A', 'B', 'K'], { skala: tn.sd_tk / tn.sd_nq }) } : null;
+  $('pdrv').innerHTML = `
+    <div class="row"><span class="l">Udsving nu (dagligt, 4 %)</span><span class="v">${fmt(M.A.sig_now)} point</span></div>
+    <div class="row"><span class="l">Gennemsnit siden 2022</span><span class="v">${fmt(M.A.sig_lr)} point</span></div>
+    <div class="row"><span class="l">Roligere end</span><span class="v">${Math.round((1 - M.A.sig_pct) * 100)} % af dagene</span></div>
+    <div class="row"><span class="l">Rentefølsomhed (ECB 10 år)</span><span class="v">${fmt(M.C.D, 1)} kurspoint pr. %-point</span></div>
+    <div class="row"><span class="l">10-årig rente (ECB, ${dk(M.data.y10_til)})</span><span class="v">${fmt(M.data.y10_nu)} %</span></div>
+    <div class="row"><span class="l">Renteudsving nu / normalt</span><span class="v">${fmt(M.C.ysig_now * 100, 1)} / ${fmt(M.C.ysig_lr * 100, 1)} bp pr. dag</span></div>
+    ${tn ? `<div class="row"><span class="l">Totalkredit vs. Nasdaq, dagsudsving (${tn.n} målinger)</span><span class="v">${fmt(tn.sd_tk)} / ${fmt(tn.sd_nq)}</span></div>` : ''}
+    ${tkS ? `<p class="note"><b>Totalkredits kurs har svunget ca. ${Math.round((1 - tkS.f) * 100)} % mindre end Nasdaqs</b> på de seneste ${tn.n} målinger. Det er for få data til at rette prognosen fast, men hvis det fortsætter, bliver 80 %-intervallet om 8 uger ${fmt(A(tkS.r[8].q10))}-${fmt(A(tkS.r[8].q90))}, chancen for 96 inden 8 uger ${pct(tkS.r[8].p96)} og chancen for, at 5 % åbner, ${pct(tkS.r[8].p5)}.</p>` : ''}
+    <p class="note">Udsvingene er lige nu ${M.A.sig_now < M.A.sig_lr ? 'under' : 'over'} gennemsnittet. Model A antager, at dagens niveau holder i 8 uger. GARCH-modellen (B) lader det ændre sig: et stort udsving i dag gør store udsving i morgen mere sandsynlige. Dagens udsving ${halv < 120 ? `halveres på ca. ${Math.round(halv)} handelsdage` : 'aftager meget langsomt'}.</p>
+    <p class="note">Rentefølsomheden er målt på 10-dages ændringer siden april 2026 (${M.C.D_n} dage, korrelation ${fmt(M.C.D_corr)}). En stigning i den 10-årige rente på 0,10 point giver ca. ${fmt(M.C.D * 0.1)} kurspoint lavere kurs på 4 %.</p>
+    ${scenTab()}
+    <p class="note"><b>5 %-tallet er det mest usikre.</b> Hældningen er ${fmt(M.k5.b5)}, et gennemsnit af Totalkredits kurser over 5 handelsdage (${M.k5.b_tk != null ? fmt(M.k5.b_tk) : '–'}, ${M.k5.n_tk} målinger) og 5 %/4 % i 2053 og 2056 over 8 uger, når 5 % lå omkring pari (${M.k5.b_analog.map(v => fmt(v)).join(' og ')}). 5 %-obligationens egne udsving er skaleret med ${fmt(M.k5.eta_scale)}. Det er et forsigtigt gulv; Totalkredits få data peger på ${M.k5.eta_scale_raw != null ? fmt(M.k5.eta_scale_raw) : '–'}. Næste tilbudskurs skønnes til aktuel kurs + ${fmt(M.spaend.s5)} = ${fmt(base5)}, mens dagens tilbudskurs er ${fmt(k5.tilbud)}.</p>
+    <table class="pg"><tr><th>Hvis hældningen er</th>${s5.map(([l]) => `<th>${l}</th>`).join('')}<th>Basis ${fmt(k5.tilbud)}</th></tr>
+      <tr><td>5 % åbner inden 8 uger</td>${s5.map(([, p]) => `<td>${pct(p)}</td>`).join('')}<td>${pct(sBase)}</td></tr></table>
+    <p class="note"><b>Kendte begivenheder:</b> ECB's rentemøde 17.12.2026 med nye økonomiske prognoser. Modellen lægger ikke ekstra uro på den dag, men historikken indeholder mange ECB-møder.</p>
+    <p class="note"><b>Efterregnet af ChatGPT (Codex)</b> i to runder 9.11.2026. I første runde fandt Codex fejl i kædningen af historikken, kalenderen (8 uger er ${UD[8]} handelsdage, ikke 40), tilbudskursens forsinkelse og nogle indeks. I anden runde genberegnede Codex hele testen og fik de samme tal. Derefter er de sidste kalenderfejl rettet. Codex' egen, uafhængige model gav om 8 uger et 80 %-interval på 93,32-97,73, 71 % chance for 96 og 7 % for at 5 % åbner. Det er tæt på appen. Codex understreger, at tallene er modelbaserede skøn og ikke dokumenterede sandsynligheder for Totalkredits kurs. Det gælder især 5 %.</p>
+    <p class="note">Model opdateret ${new Date(M.opdateret).toLocaleString('da-DK', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })}. Data fra Nasdaq Copenhagen (4 % og 5 % 2053, 2056 og 2059), Totalkredit og ECB's rentekurve.</p>`;
 }
-
-document.querySelectorAll('#scen button').forEach(b => b.addEventListener('click', () => { scen = b.dataset.s; localStorage.setItem('laan_scen', scen); renderPrognose(); }));
 
 // Forventet udvikling (prognoser fra september-oktober 2026; opdateres manuelt)
 $('fc').innerHTML = `
