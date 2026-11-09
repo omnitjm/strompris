@@ -72,6 +72,20 @@ table.fc { width: 100%; border-collapse: collapse; font-size: 13px; font-variant
 table.fc th, table.fc td { padding: 6px 4px; border-top: 1px solid var(--line); text-align: right; }
 table.fc th:first-child, table.fc td:first-child { text-align: left; }
 table.fc th { color: var(--muted); font-weight: 600; border-top: 0; }
+.seg { display: flex; background: var(--raised); border-radius: 10px; padding: 2px; margin: 0 0 10px; }
+.seg button { flex: 1; font: 600 12.5px/1.2 var(--body); color: var(--fg); background: none; border: 0; border-radius: 8px; padding: 7px 4px; cursor: pointer; }
+.seg button.on { background: #636366; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); margin: 6px 2px 2px; }
+.legend i { display: inline-block; width: 14px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.summary { font-size: 14px; margin: 10px 2px 4px; }
+.summary p { margin: 0 0 6px; }
+table.pg { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; margin-top: 6px; }
+table.pg th, table.pg td { padding: 6px 3px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.pg th:first-child, table.pg td:first-child { text-align: left; }
+table.pg th { color: var(--muted); font-weight: 600; border-top: 0; font-size: 11.5px; line-height: 1.25; vertical-align: bottom; }
+table.pg td small { display: block; color: var(--muted); font-size: 11px; }
+details.method { margin-top: 8px; }
+details.method summary { font-size: 13px; color: var(--blue); cursor: pointer; padding: 4px 2px; }
 .err { background: var(--panel); border: 1px solid var(--red); border-radius: 16px; padding: 12px 14px; font-size: 14px; }
 footer { font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; padding-inline: 4px; }
 footer a { color: inherit; }
@@ -105,7 +119,21 @@ footer a { color: inherit; }
   </section>
 
   <section class="card">
-    <div class="ctitle"><h2>Forventet udvikling</h2></div>
+    <div class="ctitle"><h2>Prognose 1-8 uger</h2></div>
+    <div class="seg" id="scen">
+      <button data-s="neutral" class="on">Neutral</button>
+      <button data-s="fald">Rente falder</button>
+      <button data-s="stig">Rente stiger</button>
+    </div>
+    <div id="pchart"></div>
+    <div class="legend"><span><i style="background:rgb(47 140 255 / .22)"></i>80 % sandsynligt</span><span><i style="background:rgb(47 140 255 / .45)"></i>50 % sandsynligt</span><span><i style="background:#fff;height:2px"></i>Midtbud</span><span><i style="background:none;border-top:2px dashed var(--accent);height:0"></i>96,0</span><span><i style="background:none;border-top:2px dashed var(--orange);height:0"></i>5 % åbner</span></div>
+    <div class="summary" id="psum"></div>
+    <div id="ptab"></div>
+    <details class="method"><summary>Sådan er prognosen regnet</summary><div id="pmeth"></div></details>
+  </section>
+
+  <section class="card">
+    <div class="ctitle"><h2>Bankernes prognoser (3-12 mdr.)</h2></div>
     <div id="fc"></div>
   </section>
 
@@ -251,7 +279,154 @@ function render() {
     h += `<div class="drow"><span class="d">${wd(r.date)} ${dk(r.date)}</span><span class="c">${e5}${fmt(c5)} ${p ? chg(c5, tilbudFor(p, 'k5'), 2, false) : ''}</span><span class="c">${e4}${fmt(c4)} ${p ? chg(c4, tilbudFor(p, 'k4')) : ''}</span></div>`;
   });
   $('days').innerHTML = h;
+  renderPrognose();
 }
+
+// ---------- Prognose 1-8 uger ----------
+// Monte Carlo på 4 %-kursen: daglige udsving målt i historikken (fra april; marts var obligationens første, urolige uger),
+// t-fordelt med fede haler. 5 % følger 4 % med en hældning målt i historikken. Scenarierne lægger en fast retning på.
+const SCEN = {
+  neutral: { r: 0, txt: 'ingen fast retning: kursen svinger som hidtil, lige stor chance for op og ned' },
+  fald: { r: -0.10, txt: 'lang rente falder 0,10 point over 3 måneder (bankernes flertal)' },
+  stig: { r: 0.15, txt: 'lang rente stiger 0,15 point over 3 måneder (AL Sydbanks prognose)' }
+};
+const KURS_PR_PT = 11;           // 0,01 point højere rente ≈ 0,11 lavere kurs
+const N_SIM = 4000, UGER = 8, DF = 5;
+let scen = SCEN[localStorage.getItem('laan_scen')] ? localStorage.getItem('laan_scen') : 'neutral';
+
+function maalUdsving() {
+  const rows = hist.filter(r => r.date >= '2026-04-01');
+  const d = [], niv = [];
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1], b = rows[i];
+    if (a.k4_nasdaq != null && b.k4_nasdaq != null) d.push(b.k4_nasdaq - a.k4_nasdaq);
+    else if (a.k4_aktuel != null && b.k4_aktuel != null) d.push(b.k4_aktuel - a.k4_aktuel);
+  }
+  rows.forEach(r => { if (r.k4_nasdaq != null) niv.push(r.k4_nasdaq); });
+  if (d.length < 20) return { sigma: 0.29, sl: 0.29, se: 0.29, n: d.length, niv };
+  const sl = Math.sqrt(d.reduce((s, x) => s + x * x, 0) / d.length);
+  let v = d.slice(0, 20).reduce((s, x) => s + x * x, 0) / 20;
+  d.forEach(x => v = 0.94 * v + 0.06 * x * x);
+  const se = Math.sqrt(v);
+  return { sigma: Math.sqrt((sl * sl + se * se) / 2), sl, se, n: d.length, niv };
+}
+
+function maalBeta() {
+  const p = [];
+  hist.forEach(r => {
+    if (r.k4_nasdaq != null && r.k5_nasdaq != null) p.push([r.k4_nasdaq, r.k5_nasdaq]);
+    if (r.k4_aktuel != null && r.k5_aktuel != null) p.push([r.k4_aktuel, r.k5_aktuel]);
+  });
+  if (p.length < 8) return { b: 0.85, n: p.length };
+  const mx = p.reduce((s, q) => s + q[0], 0) / p.length, my = p.reduce((s, q) => s + q[1], 0) / p.length;
+  const b = p.reduce((s, q) => s + (q[0] - mx) * (q[1] - my), 0) / p.reduce((s, q) => s + (q[0] - mx) ** 2, 0);
+  return { b: Math.max(0.5, Math.min(1.0, b)), n: p.length };
+}
+
+function rng(seed) {
+  let a = seed >>> 0, spare = null;
+  const u = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const n = () => { if (spare != null) { const s = spare; spare = null; return s; } let x; do x = u(); while (x === 0); const r = Math.sqrt(-2 * Math.log(x)), f = 2 * Math.PI * u(); spare = r * Math.sin(f); return r * Math.cos(f); };
+  const tScale = Math.sqrt((DF - 2) / DF);
+  return () => { let c = 0; for (let i = 0; i < DF; i++) { const z = n(); c += z * z; } return n() / Math.sqrt(c / DF) * tScale; };
+}
+
+function simuler(sigma, beta, base5) {
+  const { k4 } = live;
+  const drift = -SCEN[scen].r * KURS_PR_PT / 63;
+  const seed = [...new Date().toDateString() + scen].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261);
+  const t = rng(seed);
+  const slut = Array.from({ length: UGER + 1 }, () => new Float64Array(N_SIM));
+  const ramt96 = new Array(UGER + 1).fill(0), aaben5 = new Array(UGER + 1).fill(0);
+  for (let p = 0; p < N_SIM; p++) {
+    let cum = 0, r96 = k4.aktuel >= TAKE4, a5 = base5 <= OPEN5;
+    for (let dag = 1; dag <= UGER * 5; dag++) {
+      cum += drift + sigma * t();
+      if (k4.aktuel + cum >= TAKE4) r96 = true;
+      if (base5 + beta * cum <= OPEN5) a5 = true;
+      if (dag % 5 === 0) { const w = dag / 5; slut[w][p] = cum; ramt96[w] += r96; aaben5[w] += a5; }
+    }
+  }
+  const q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(f * arr.length))];
+  return slut.map((arr, w) => {
+    if (w === 0) return { w, q10: 0, q25: 0, q50: 0, q75: 0, q90: 0, p96: +(k4.aktuel >= TAKE4), p5: +(base5 <= OPEN5), op: 0.5 };
+    arr.sort();
+    return { w, q10: q(arr, .1), q25: q(arr, .25), q50: q(arr, .5), q75: q(arr, .75), q90: q(arr, .9),
+      p96: ramt96[w] / N_SIM, p5: aaben5[w] / N_SIM, op: arr.filter(x => x > 0).length / N_SIM };
+  });
+}
+
+function renderPrognose() {
+  const { k4, k5 } = live;
+  if (!k4 || !k5) return;
+  document.querySelectorAll('#scen button').forEach(b => b.classList.toggle('on', b.dataset.s === scen));
+  const u = maalUdsving(), bt = maalBeta();
+  const base5 = Math.min(k5.tilbud, k5.aktuel);
+  const niv5 = k4.aktuel + (OPEN5 - base5) / bt.b;   // 4 %-kurs hvor 5 % ca. åbner
+  const res = simuler(u.sigma, bt.b, base5);
+  const B = belob();
+  const kt = k => hovedstol(k, B) - B;
+  const pct = x => x < 0.005 ? '< 1\u00a0%' : x > 0.995 ? '> 99\u00a0%' : Math.round(x * 100) + '\u00a0%';
+  const ugeDato = w => { const d = new Date(); d.setDate(d.getDate() + 7 * w); return `${d.getDate()}/${d.getMonth() + 1}`; };
+  const A = x => k4.aktuel + x, T = x => k4.tilbud + x;
+
+  // Graf: aktuel 4 %-kurs, historik + vifte
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
+  const hp = hist.filter(r => r.date < today).map(r => aktuelFor(r, 'k4')).filter(v => v != null).slice(-20);
+  const nH = hp.length;
+  const c = $('pchart'); c.innerHTML = '';
+  const W = 520, H = 220, m = { l: 40, r: 10, t: 12, b: 24 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const ys = [...hp, A(res[UGER].q10), A(res[UGER].q90), TAKE4, k4.aktuel];
+  if (niv5 > Math.min(...ys) - 1.5) ys.push(niv5);
+  const lo = Math.floor((Math.min(...ys) - 0.2) * 2) / 2, hi = Math.ceil((Math.max(...ys) + 0.2) * 2) / 2;
+  const x0 = -nH, x1 = UGER * 5;
+  const x = d => m.l + (d - x0) / (x1 - x0) * iw, y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
+  const s = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Prognose for aktuel kurs på 4 % de næste 8 uger' }, c);
+  const step = (hi - lo) > 4 ? 1 : 0.5;
+  for (let v = lo; v <= hi + 1e-9; v += step) { el('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'rgb(255 255 255 / .07)' }, s); const tx = el('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end' }, s); tx.textContent = fmt(v, step < 1 ? 1 : 0); }
+  const band = (a, b, fill) => { const top = res.map(r => `${x(r.w * 5)},${y(A(r[b]))}`), bot = res.slice().reverse().map(r => `${x(r.w * 5)},${y(A(r[a]))}`); el('polygon', { points: [...top, ...bot].join(' '), fill }, s); };
+  band('q10', 'q90', 'rgb(47 140 255 / .22)');
+  band('q25', 'q75', 'rgb(47 140 255 / .45)');
+  el('line', { x1: m.l, x2: W - m.r, y1: y(TAKE4), y2: y(TAKE4), stroke: '#ffd60a', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, s);
+  if (niv5 >= lo && niv5 <= hi) el('line', { x1: m.l, x2: W - m.r, y1: y(niv5), y2: y(niv5), stroke: '#ff9f0a', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, s);
+  el('line', { x1: x(0), x2: x(0), y1: m.t, y2: m.t + ih, stroke: 'rgb(255 255 255 / .25)' }, s);
+  if (nH) el('path', { d: [...hp, k4.aktuel].map((v, i) => (i ? 'L' : 'M') + x(i - nH) + ',' + y(v)).join(''), fill: 'none', stroke: '#2f8cff', 'stroke-width': 2, 'stroke-linejoin': 'round' }, s);
+  el('path', { d: res.map((r, i) => (i ? 'L' : 'M') + x(r.w * 5) + ',' + y(A(r.q50))).join(''), fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-dasharray': '1 0' }, s);
+  el('circle', { cx: x(0), cy: y(k4.aktuel), r: 4.5, fill: '#2f8cff', stroke: '#1c1c1e', 'stroke-width': 2 }, s);
+  [[-nH, nH ? `${nH} dage før` : ''], [0, 'I dag'], [10, '+2 uger'], [20, '+4 uger'], [40, '+8 uger']].forEach(([d, l]) => { if (!l) return; const tx = el('text', { x: x(d), y: H - 6, 'text-anchor': d === -nH ? 'start' : d === 40 ? 'end' : 'middle' }, s); tx.textContent = l; });
+
+  // Opsummering
+  const r1 = res[1], r4 = res[4], r8 = res[8];
+  const iv = r => `${fmt(A(r.q10))}-${fmt(A(r.q90))}`;
+  const ktNu = kt(k4.tilbud), kt4 = kt(T(r4.q50));
+  $('psum').innerHTML = `
+    <p>Aktuel kurs på 4 % er <b>${fmt(k4.aktuel)}</b>. Med 80 % sandsynlighed ligger den om 1 uge mellem <b>${iv(r1)}</b>, om 4 uger mellem <b>${iv(r4)}</b> og om 8 uger mellem <b>${iv(r8)}</b>.</p>
+    <p>Chance for, at 4 % når <b>96,0</b> mindst én dag: <b>${pct(res[2].p96)}</b> inden for 2 uger, <b>${pct(r4.p96)}</b> inden for 4 uger og <b>${pct(r8.p96)}</b> inden for 8 uger.</p>
+    <p>Chance for, at <b>5 % åbner</b>: <b>${pct(r4.p5)}</b> inden for 4 uger og <b>${pct(r8.p5)}</b> inden for 8 uger. Det kræver, at 4 % falder til ca. <b>${fmt(niv5)}</b> (${fmt(k4.aktuel - niv5)} point lavere end nu).</p>
+    <p>Chance for en bedre 4 %-kurs end i dag om 4 uger: <b>${pct(r4.op)}</b>. Midtbuddet for kurstabet om 4 uger er <b>${kr(kt4)}</b> (i dag ${kr(ktNu)}).</p>`;
+
+  // Tabel uge for uge
+  let tb = `<table class="pg"><tr><th>Uge</th><th>4 % aktuel<br>midtbud</th><th>Har nået<br>96</th><th>5 %<br>åbner</th><th>Kurstab<br>midtbud</th></tr>`;
+  res.slice(1).forEach(r => {
+    tb += `<tr><td>${r.w} <small>${ugeDato(r.w)}</small></td>
+      <td>${fmt(A(r.q50))}<small>${fmt(A(r.q10))}-${fmt(A(r.q90))}</small></td>
+      <td>${pct(r.p96)}</td><td>${pct(r.p5)}</td>
+      <td>${Math.round(kt(T(r.q50)) / 1000)}k<small>${Math.round(kt(T(r.q90)) / 1000)}k-${Math.round(kt(T(r.q10)) / 1000)}k</small></td></tr>`;
+  });
+  $('ptab').innerHTML = tb + `</table><p class="note">Lille tal under kursen = 80 %-interval. "Har nået 96" og "5 % åbner" = chancen for, at det sker mindst én dag inden udgangen af ugen. Kurstab regnes på tilbudskursen (nu ${fmt(k4.tilbud)}) og et udbetalt beløb på ${kr(B)}</p>`;
+
+  // Metode og træfsikkerhed bagud
+  const z80 = 1.476 * Math.sqrt((DF - 2) / DF);
+  const hit = h => { const v = u.niv; let i = 0, n = 0; for (let k = 0; k + h < v.length; k++) { n++; if (Math.abs(v[k + h] - v[k]) <= z80 * u.sl * Math.sqrt(h)) i++; } return n ? Math.round(i / n * 100) + ' %' : '–'; };
+  $('pmeth').innerHTML = `
+    <p class="note"><b>Model.</b> 4 000 simulerede forløb af 4 %-kursen, dag for dag i 40 handelsdage. Hvert dagligt udsving trækkes fra en t-fordeling (fede haler, så store hop som i marts er med). Udsvinget pr. dag er <b>${fmt(u.sigma)}</b> kurspoint: et gennemsnit af hele perioden siden 1.4.2026 (${fmt(u.sl)}, ${u.n} handelsdage) og de seneste uger (${fmt(u.se)}).</p>
+    <p class="note"><b>Retning.</b> Scenarie: ${SCEN[scen].txt}. ${SCEN[scen].r ? `Det flytter 4 % ${fmt(-SCEN[scen].r * KURS_PR_PT * 40 / 63)} kurspoint over 8 uger.` : ''} Ingen kan forudsige renten. Prognosen viser især, hvor meget kursen plejer at svinge.</p>
+    <p class="note"><b>5 %.</b> 5 %-kursen flytter sig ${fmt(bt.b)} point, hver gang 4 % flytter sig 1 point (målt på ${bt.n} dage). 5 % regnes som åben, når tilbudskursen kommer ned på 99,80.</p>
+    <p class="note"><b>Træfsikkerhed.</b> Hvis 80 %-intervallet var brugt siden april, havde det ramt den faktiske kurs ${hit(5)} af gangene efter 1 uge, ${hit(20)} efter 4 uger og ${hit(40)} efter 8 uger. Målet er 80 %.</p>
+    <p class="note">Det er en statistisk prognose, ikke rådgivning. Store nyheder (ECB, inflationstal, uro på markedet) kan flytte kursen mere, end modellen regner med.</p>`;
+}
+
+document.querySelectorAll('#scen button').forEach(b => b.addEventListener('click', () => { scen = b.dataset.s; localStorage.setItem('laan_scen', scen); renderPrognose(); }));
 
 // Forventet udvikling (prognoser fra september-oktober 2026; opdateres manuelt)
 $('fc').innerHTML = `
