@@ -841,5 +841,14 @@
   "k4_tilbud": 95.66,
   "k4_aktuel": 95.4,
   "k4_aaben": true
+ },
+ {
+  "date": "2026-11-11",
+  "k5_tilbud": 101.64,
+  "k5_aktuel": 101.13,
+  "k5_aaben": false,
+  "k4_tilbud": 95.84,
+  "k4_aktuel": 95.24,
+  "k4_aaben": true
  }
 ]
