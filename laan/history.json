@@ -840,7 +840,9 @@
   "k5_aaben": false,
   "k4_tilbud": 95.66,
   "k4_aktuel": 95.4,
-  "k4_aaben": true
+  "k4_aaben": true,
+  "k5_nasdaq": 101.84,
+  "k4_nasdaq": 95.65
  },
  {
   "date": "2026-11-11",
@@ -849,6 +851,18 @@
   "k5_aaben": false,
   "k4_tilbud": 95.84,
   "k4_aktuel": 95.24,
-  "k4_aaben": true
+  "k4_aaben": true,
+  "k5_nasdaq": 101.2,
+  "k4_nasdaq": 95.525
+ },
+ {
+  "date": "2026-11-12",
+  "k5_tilbud": 101.0,
+  "k5_aktuel": 101.09,
+  "k5_aaben": false,
+  "k4_tilbud": 95.58,
+  "k4_aktuel": 95.25,
+  "k4_aaben": true,
+  "k4_nasdaq": 95.605
  }
 ]
