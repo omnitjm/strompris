@@ -893,10 +893,11 @@
  {
   "date": "2026-11-18",
   "k5_tilbud": 101.15,
-  "k5_aktuel": 100.83,
+  "k5_aktuel": 100.87,
   "k5_aaben": false,
-  "k4_tilbud": 95.06,
-  "k4_aktuel": 94.79,
-  "k4_aaben": true
+  "k4_tilbud": 95.12,
+  "k4_aktuel": 94.8,
+  "k4_aaben": true,
+  "k4_nasdaq": 95.23
  }
 ]
